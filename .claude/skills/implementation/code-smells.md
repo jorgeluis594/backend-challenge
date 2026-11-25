@@ -1,6 +1,6 @@
 # Code smells
 
-Read the diff of the unit against this list before committing. Fix every match in the code you wrote; do not commit it and do not leave it for later. Tests are not yours to edit: a smell in a test file goes to `test-writer`.
+This code will be read and judged by people. Read the diff of the unit against this list before committing. Fix every match in the code you wrote; do not commit it and do not leave it for later. Tests are not yours to edit: a smell in a test file goes to `test-writer`.
 
 ## 1. Ternaries
 

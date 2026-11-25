@@ -35,6 +35,7 @@ The agent running this skill is the **coordinator**: it writes the specs, starts
    - runs Claude Code's `/code-review` at level `high` on `git diff main...HEAD` and keeps only the findings that hold against the code;
    - runs Claude Code's `/verify` when the task implements functionality reachable through the API: it starts the stack and exercises each acceptance criterion against the running app and the provider;
    - runs `npm run check` and `npm run test:api`;
+   - reads the whole diff against `.claude/skills/implementation/code-smells.md`; the code will be read by people, so every match is a blocker;
    - checks the change against the task (scope and every acceptance criterion), against `docs/architecture.md`, and that every test file was written by `test-writer` runs and not adjusted to the code.
 
    It reports **APPROVED** when there are no blockers, otherwise **REJECTED** with numbered findings.
@@ -50,6 +51,6 @@ T6 (patient replies) runs in parallel with T5 (send pass), but its tests need a 
 ## Guardrails
 
 - Workers do not merge, rebase, push, use `git stash` or open PRs, and they touch only their task's scope. The coordinator merges and pushes.
-- A finding is a **blocker** when it breaks an acceptance criterion or a rule of the statement, leaves a failure case unhandled, contradicts `docs/architecture.md`, or leaves a check red or a test skipped. Everything else is a suggestion and does not reject.
+- A finding is a **blocker** when it breaks an acceptance criterion or a rule of the statement, leaves a failure case unhandled, contradicts `docs/architecture.md`, matches a smell of `code-smells.md`, or leaves a check red or a test skipped. Everything else is a suggestion and does not reject.
 - The coordinator never reports a check or a verification as "not run": it sends it to a worker.
 - Never poll for workers; end the turn and let Orca wake you.

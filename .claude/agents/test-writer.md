@@ -21,6 +21,7 @@ If any of the three is missing, stop and ask for it.
 - `src/domain/`: types only. Use them to build the inputs of a function.
 - `*.test.ts` files and `tests/helpers/`, to follow the style and use the existing utilities.
 - `package.json`, for the commands.
+- `.claude/skills/implementation/code-smells.md`: the tests will be read by people. Your test code follows it too.
 
 ## What you may not read
 
@@ -56,6 +57,7 @@ Before writing any code, list the test titles. Each title states the situation a
 - A provider client test covers only what the provider can produce: 200, 202, 422, 503 and 504. It cannot be slow or unreachable, so the timeout and the network error are not tested.
 - Branded types (`Phone`, `Timezone`, ids) are built in tests with `as`: `'+34600111222' as Phone`.
 - Vitest and its `expect` only.
+- Write tests a person can read top to bottom: the data of the case visible in the test, descriptive names, no logic (loops, conditionals, computed expected values) and no helper that hides what is being asserted.
 
 ### 3. Run them
 

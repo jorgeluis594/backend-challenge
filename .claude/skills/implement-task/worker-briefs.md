@@ -30,8 +30,9 @@ REVIEW-ONLY TASK for T<N> in this worktree (branch <branch>). Validate; do not e
 2. <If the task implements functionality reachable through the API:> Run Claude Code's /verify: start the stack with `docker compose up --build`, and exercise every acceptance criterion of T<N> against the running API and the provider (its /admin endpoints show what was sent). Set the time with PUT /test/clock. Stop the stack when done.
 3. Run `npm run check` and `npm run test:api` yourself.
 4. Check the change against T<N> in docs/architecture.md: it does what the task asks and nothing outside it; every acceptance criterion is met; the layers, signatures, data model and transactions follow the document; expected values in the tests come from the statement, and no test was weakened, skipped or adjusted to the code (`git log -p -- '*.test.ts'`).
+5. Read the whole diff, tests included, against .claude/skills/implementation/code-smells.md. This code will be read by people: every match is a blocker, reported with file:line and the number of the smell.
 COORDINATOR NOTES — deviations declared by the implementer: <list>.
-A finding is a blocker when it breaks an acceptance criterion or a rule of the statement, leaves a failure case unhandled, contradicts docs/architecture.md, or leaves a check red or a test skipped. Everything else is a suggestion.
+A finding is a blocker when it breaks an acceptance criterion or a rule of the statement, leaves a failure case unhandled, contradicts docs/architecture.md, matches a smell of code-smells.md, or leaves a check red or a test skipped. Everything else is a suggestion.
 REPORT (worker_done): verdict APPROVED (no blockers) or REJECTED; numbered findings with file:line, blocker or suggestion, what is wrong and why it matters; for /verify, each acceptance criterion with what you sent and what you observed; each check command with its result. --outcome succeeded on APPROVED, --outcome failed on REJECTED.
 ```
 
