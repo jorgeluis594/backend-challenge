@@ -763,6 +763,45 @@ describe('PATCH /appointments/:id: the reminder for the new time', () => {
     );
   });
 
+  test('a previous reminder already sent stays sent and the new time gets a pending one', async () => {
+    await setClock('2027-03-01T08:00:00Z');
+    const clinic = await createClinic({ name: 'Clínica Ya Avisada', timezone: 'Europe/Madrid' });
+    const patient = await createPatient({ clinicId: clinic.id, name: 'Tomás', phone: '+34600140619', acceptsReminders: true });
+    const created = await createAppointment({ clinicId: clinic.id, patientId: patient.id, startsAt: '2027-03-10T09:00:00Z' });
+    await setClock('2027-03-09T09:00:00Z'); // Tuesday 10:00 in Madrid: the reminder's time
+    await request('POST', '/jobs/reminders/run');
+    await setClock('2027-03-09T10:00:00Z');
+
+    const response = await request('PATCH', `/appointments/${created.id}`, {
+      startsAt: '2027-03-12T10:00:00Z', // Friday 11:00 in Madrid
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(
+      expect.objectContaining({
+        startsAt: '2027-03-12T10:00:00.000Z',
+        reminders: [
+          {
+            id: created.reminders[0]?.id,
+            scheduledFor: '2027-03-09T09:00:00.000Z',
+            status: 'sent',
+            attempts: 1,
+            sentAt: '2027-03-09T09:00:00.000Z',
+            skipReason: null,
+          },
+          {
+            id: expect.any(String),
+            scheduledFor: '2027-03-11T10:00:00.000Z', // Thursday 11:00 in Madrid
+            status: 'pending',
+            attempts: 0,
+            sentAt: null,
+            skipReason: null,
+          },
+        ],
+      }),
+    );
+  });
+
   test('rescheduling twice lists three reminders oldest to newest, only the last one pending', async () => {
     await setClock('2027-03-01T08:00:00Z');
     const clinic = await createClinic({ name: 'Clínica Indecisa', timezone: 'Europe/Madrid' });

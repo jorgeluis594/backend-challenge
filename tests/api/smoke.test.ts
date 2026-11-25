@@ -47,7 +47,6 @@ describe('test clock', () => {
 
 describe('routes of the contract not built yet', () => {
   test.each([
-    ['POST', '/jobs/reminders/run'],
     ['POST', '/webhooks/inbound-messages'],
   ] as const)('%s %s answers 501 with an error message', async (method, path) => {
     const response = await request(method, path);
