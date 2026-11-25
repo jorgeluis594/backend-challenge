@@ -129,6 +129,16 @@ POSTGRES_PASSWORD=... docker compose -f docker-compose.prod.yml up -d --build
 
 Mientras no haya un proveedor real, `PROVIDER_URL` apunta por defecto al simulador de `provider/`. El stack de `docker compose up --build` no lleva `cron`: ahí la pasada la lanzan los tests, que controlan la hora con `PUT /test/clock`.
 
+**Proveedor real de WhatsApp.** La pasada solo conoce el contrato `ProviderClient` de `src/app/ports.ts`, así que cambiar de proveedor es escribir otra implementación en `src/infra/provider/` y cambiar una línea del cableado; los reintentos y la reserva del intento no se tocan. Lo que sí cambia es lo que ese contrato da por hecho y el simulador cumple:
+
+| Hoy | Con WhatsApp |
+|---|---|
+| Se envía texto libre | Un recordatorio va fuera de la ventana de 24 h y solo puede ser una plantilla aprobada: el contrato pasa de `text` a plantilla más variables |
+| El proveedor no reenvía si repite la `Idempotency-Key` | Depende del proveedor elegido; si no lo ofrece, un resultado dudoso no se puede reintentar a ciegas y hay que conciliarlo con los avisos de estado |
+| 200 o 202 es "entregado" | Es "aceptado": la entrega real llega por un webhook de estado, que pide un estado aparte de `sent` |
+
+Las respuestas del paciente llegarían con otro formato y firmadas: una ruta nueva verifica la firma y traduce el cuerpo al `InboundMessage` que ya recibe `handleInboundMessage`.
+
 **Despliegue.** Contenedores sin estado detrás de un balanceador; PostgreSQL gestionado con backups y restauración probada; las migraciones como paso del release, no al arrancar cada instancia; secretos fuera de la imagen (gestor de secretos del proveedor cloud); `CLOCK_MODE` nunca definido en producción.
 
 **Monitorización.**
