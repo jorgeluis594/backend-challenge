@@ -384,18 +384,29 @@ Reference implementation of the scheduling rule (verified against the DST and Ca
 export function planReminder(input: PlanReminderInput): ReminderPlan {
   const start    = DateTime.fromJSDate(input.startsAt,  { zone: input.timezone });
   const earliest = DateTime.fromJSDate(input.notBefore, { zone: input.timezone });
-  let at = outOfQuietHours(start.minus({ days: 1 }), input.quietHours);
-  if (at < earliest) at = outOfQuietHours(earliest, input.quietHours);
+  const dayBefore = outOfQuietHours(start.minus({ days: 1 }), input.quietHours);
+  const at = laterOf(dayBefore, outOfQuietHours(earliest, input.quietHours));
   const scheduledFor = at.toJSDate();
-  return at < start ? { status: 'pending', scheduledFor } : { status: 'skipped', scheduledFor, skipReason: 'too_late' };
+  if (at < start) return { status: 'pending', scheduledFor };
+  return { status: 'skipped', scheduledFor, skipReason: 'too_late' };
 }
 
-function outOfQuietHours(t: DateTime, { from, until }: QuietHours): DateTime {
-  const crossesMidnight = from > until;
-  const isQuiet = crossesMidnight ? t.hour >= from || t.hour < until : t.hour >= from && t.hour < until;
-  if (!isQuiet) return t;
-  const end = t.set({ hour: until, minute: 0, second: 0, millisecond: 0 });
-  return crossesMidnight && t.hour >= from ? end.plus({ days: 1 }) : end;
+function laterOf(a: DateTime, b: DateTime): DateTime {
+  if (a < b) return b;
+  return a;
+}
+
+function outOfQuietHours(t: DateTime, quietHours: QuietHours): DateTime {
+  if (!isQuiet(t.hour, quietHours)) return t;
+  const end = t.set({ hour: quietHours.until, minute: 0, second: 0, millisecond: 0 });
+  const endsNextDay = quietHours.from > quietHours.until && t.hour >= quietHours.from;
+  if (endsNextDay) return end.plus({ days: 1 });
+  return end;
+}
+
+function isQuiet(hour: number, { from, until }: QuietHours): boolean {
+  if (from > until) return hour >= from || hour < until;   // the period crosses midnight
+  return hour >= from && hour < until;
 }
 ```
 

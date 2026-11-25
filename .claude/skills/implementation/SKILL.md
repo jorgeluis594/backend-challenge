@@ -27,7 +27,8 @@ Repeat for each logical unit:
    - The test is wrong: do not edit it. Start a fresh `test-writer` with the same input plus the rule it misread.
    - The statement allows both readings: stop and ask the user.
 5. **Run everything**: `npm run check`, and `npm run test:api` when the unit touches an endpoint, a query or a migration. Every test passes; none is skipped.
-6. **Commit** the unit with its tests in one commit. Inspect the diff for one clear purpose and stage only that unit. Concise imperative subject in English describing the behavior, without prefixes such as `feat:` or `fix:`.
+6. **Review for code smells.** Read the diff of the unit against [code-smells.md](code-smells.md) and fix every match in your code. Run `npm run check` again if you changed anything.
+7. **Commit** the unit with its tests in one commit. Inspect the diff for one clear purpose and stage only that unit. Concise imperative subject in English describing the behavior, without prefixes such as `feat:` or `fix:`.
 
 A unit with no behavior of its own (project setup, Docker, configuration, CI) skips steps 3 and 4.
 
@@ -37,4 +38,5 @@ A unit with no behavior of its own (project setup, Docker, configuration, CI) sk
 - A failing test is fixed in the code. Never change an expected value, skip a test or weaken an assertion to make it pass.
 - If a check fails for a reason outside the change (Docker, database, provider), report it with its output instead of skipping it.
 - The conventions of the code (layers, `Result<T, E>` for expected failures, the clock, dates in UTC) are in `docs/architecture.md`. Do not restate or reinterpret them here.
+- Never commit a unit that still has a smell listed in [code-smells.md](code-smells.md).
 - Committing does not authorize pushing.
