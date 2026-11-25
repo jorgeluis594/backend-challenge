@@ -294,14 +294,11 @@ export type AppointmentRepository = Readonly<{
   /** Inserts the appointment and its first reminder atomically. */
   create(input: { clinicId: ClinicId; patientId: PatientId; startsAt: Date; reminder: ReminderPlan }): Promise<Appointment>;
   findById(input: { id: AppointmentId }): Promise<Appointment | null>;
-  /** SELECT … FOR UPDATE. Only inside a transaction. */
-  lockById(input: { id: AppointmentId }): Promise<Appointment | null>;
   update(input: { id: AppointmentId; startsAt?: Date; status?: AppointmentStatus }): Promise<void>;
-  /** Locks the appointment that received the most recently SENT reminder to that phone
+  /** The appointment that received the most recently SENT reminder to that phone
       (reminders with status 'sent', ORDER BY sent_at DESC, seq DESC, LIMIT 1), among appointments
-      that are not cancelled and start after `at`. FOR UPDATE OF the appointment only.
-      Only inside a transaction. */
-  lockLastRemindedByPhone(input: { phone: string; at: Date }): Promise<{ id: AppointmentId } | null>;
+      that are not cancelled and start after `at`. */
+  findLastRemindedByPhone(input: { phone: string; at: Date }): Promise<{ id: AppointmentId } | null>;
 }>;
 
 /** A pending reminder with everything needed to decide and send it. */
@@ -349,8 +346,8 @@ Repository rules:
 
 - A `pending` plan is stored with `next_attempt_at = scheduled_for`; a `skipped` plan is stored with its reason.
 - Every `Appointment` returned carries its reminders ordered by `seq`.
-- Raw queries (`$queryRaw`, needed for every lock):
-  - name the locked table: `FOR UPDATE OF r SKIP LOCKED`, `FOR UPDATE OF a`. A bare `FOR UPDATE` on a join locks every joined table, which blocks other passes and can deadlock with reschedule and cancel;
+- The only raw query (`$queryRaw`) is `lockNextDue`; it is the only lock in the system:
+  - name the locked table: `FOR UPDATE OF r SKIP LOCKED`. A bare `FOR UPDATE` on a join locks every joined table and would make other passes skip unrelated reminders;
   - cast uuid parameters (`${id}::uuid`) and write enum values as SQL literals (`status = 'pending'`), not as parameters;
   - use the snake_case column names of section 4 and map the raw row in the repository.
 - `insertIfNew` needs no raw SQL: `createMany({ data: [row], skipDuplicates: true })` and `count === 1`.
@@ -447,7 +444,7 @@ Cannot fail: an invalid timezone never becomes a `Timezone`.
   Promise<Result<Appointment, 'APPOINTMENT_NOT_FOUND' | 'APPOINTMENT_CANCELLED' | 'APPOINTMENT_STARTED' | 'STARTS_AT_NOT_FUTURE'>>
 ```
 In one transaction, with `const at = now()`, checked in this order:
-1. `appointments.lockById`. Missing → `APPOINTMENT_NOT_FOUND`.
+1. `appointments.findById`. Missing → `APPOINTMENT_NOT_FOUND`.
 2. Status `cancelled` → `APPOINTMENT_CANCELLED`. Current `startsAt <= at` → `APPOINTMENT_STARTED`. New `startsAt <= at` → `STARTS_AT_NOT_FUTURE`.
 3. Same instant as the current `startsAt` (compare `getTime()`) → return the appointment unchanged (rule 1: no second reminder for the same time).
 4. `reminders.cancelPending`; `appointments.update({ id, startsAt, status: 'scheduled' })`; `clinics.findById` for the timezone; `planReminder`; `reminders.create`. The new reminder is created even when the previous one was already sent.
@@ -460,7 +457,7 @@ Every repository call in these steps uses the repositories of the transaction.
 ```ts
 (input: { id: AppointmentId }) => Promise<Result<Appointment, 'APPOINTMENT_NOT_FOUND'>>
 ```
-In one transaction: lock; missing → error; already cancelled → return it unchanged; otherwise `reminders.cancelPending`, `appointments.update({ id, status: 'cancelled' })`, return the fresh appointment.
+In one transaction: `appointments.findById`; missing → error; already cancelled → return it unchanged; otherwise `reminders.cancelPending`, `appointments.update({ id, status: 'cancelled' })`, return the fresh appointment.
 
 ### `runReminderPass` — deps `{ transaction, provider }`
 
@@ -480,7 +477,7 @@ Why this is safe:
 - A reminder that fails stays `pending` with a later `next_attempt_at`, so the same pass does not pick it again. A retry is never a wait inside the pass.
 - `decideSend` runs before every attempt, so retries are also dropped as `too_late`.
 - If the process dies after the provider accepted, the reminder is still `pending`; the next pass resends with the same `Idempotency-Key` and the provider deduplicates.
-- The pass locks only the reminder row, never the appointment, so it cannot deadlock with reschedule or cancel (which lock the appointment first and then wait for the reminder).
+- Appointments are never locked. Reschedule, cancel and the webhook use a transaction only so their writes land together; the unique index on pending reminders is the guard against two live reminders for one appointment.
 
 ### `handleInboundMessage` — deps `{ transaction }`
 
@@ -490,7 +487,7 @@ Why this is safe:
 In one transaction:
 1. `inboundMessages.insertIfNew` (`ON CONFLICT DO NOTHING`). `false` → `duplicate`.
 2. `parseReply(text)`. `null` → `ignored`.
-3. `appointments.lockLastRemindedByPhone({ phone: from, at: now() })`. None → `ignored`.
+3. `appointments.findLastRemindedByPhone({ phone: from, at: now() })`. None → `ignored`.
 4. `confirm` → `update({ id, status: 'confirmed' })`. `cancel` → `reminders.cancelPending` and `update({ id, status: 'cancelled' })`. → `applied`.
 
 The message is stored in the same transaction that applies it: if applying fails, the provider's retry is processed again. The lookup is by phone, not by patient, because the same number can belong to several patients. A cancelled appointment is excluded from the lookup, so a SI after a NO is ignored.
@@ -533,7 +530,7 @@ export const createAppointment = makeCreateAppointment({
 export const rescheduleAppointment = makeRescheduleAppointment({ transaction, quietHours: config.quietHours });
 ```
 
-`infra/repositories/index.ts` exports `makeRepositories(db)` (accepts the client or a transaction client), `repositories = makeRepositories(prisma)` and `transaction`, which wraps `prisma.$transaction(tx => work(makeRepositories(tx)), { timeout })`. Queries with `FOR UPDATE` use `$queryRaw` on the transaction client.
+`infra/repositories/index.ts` exports `makeRepositories(db)` (accepts the client or a transaction client), `repositories = makeRepositories(prisma)` and `transaction`, which wraps `prisma.$transaction(tx => work(makeRepositories(tx)), { timeout })`. `lockNextDue` uses `$queryRaw` on the transaction client.
 
 ## 9. HTTP
 
@@ -674,8 +671,8 @@ In wave 3, T6 does not depend on T5's code but its tests need a sent reminder: T
 
 ### T4. Appointments
 
-**Scope.** `POST /appointments`, `GET /appointments/:id`, `PATCH /appointments/:id`, `POST /appointments/:id/cancel`; the four use cases; appointment repository (`create`, `findById`, `lockById`, `update`) and reminder repository (`create`, `cancelPending`).
-**Out of scope.** Sending; the webhook; `lockNextDue`, `settle`, `lockLastRemindedByPhone`.
+**Scope.** `POST /appointments`, `GET /appointments/:id`, `PATCH /appointments/:id`, `POST /appointments/:id/cancel`; the four use cases; appointment repository (`create`, `findById`, `update`) and reminder repository (`create`, `cancelPending`).
+**Out of scope.** Sending; the webhook; `lockNextDue`, `settle`, `findLastRemindedByPhone`.
 **Owns.** `app/{create,get,reschedule,cancel}-appointment.ts`, `infra/repositories/{appointments,reminders}.ts`, `infra/wiring/appointments.ts`, `infra/http/routes/appointments.ts`.
 
 **Acceptance.**
@@ -712,8 +709,8 @@ In wave 3, T6 does not depend on T5's code but its tests need a sent reminder: T
 
 ### T6. Patient replies
 
-**Scope.** `POST /webhooks/inbound-messages`, `handleInboundMessage`, `insertIfNew`, `lockLastRemindedByPhone`.
-**Owns.** `app/handle-inbound-message.ts`, `infra/repositories/inbound-messages.ts`, `infra/wiring/inbound-messages.ts`, `infra/http/routes/webhooks.ts`; in `infra/repositories/appointments.ts` only `lockLastRemindedByPhone`.
+**Scope.** `POST /webhooks/inbound-messages`, `handleInboundMessage`, `insertIfNew`, `findLastRemindedByPhone`.
+**Owns.** `app/handle-inbound-message.ts`, `infra/repositories/inbound-messages.ts`, `infra/wiring/inbound-messages.ts`, `infra/http/routes/webhooks.ts`; in `infra/repositories/appointments.ts` only `findLastRemindedByPhone`.
 
 **Acceptance.**
 1. SI confirms the appointment of the last reminder sent to that phone.
