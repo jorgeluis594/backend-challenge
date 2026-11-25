@@ -583,7 +583,7 @@ A route does three things: parse the input with a Zod schema, call the use case,
 - Test files run one at a time (`fileParallelism: false`): the clock is global to the service.
 - Every test creates its own clinic and patient with a phone no other test uses. Provider rules and messages are per phone.
 - Reminders left by earlier tests may be processed by a later pass. Assert the state of the test's own appointments and the messages sent to its own phone; for `processed`, assert a lower bound.
-- The provider cannot be slow or unreachable. The 5 s timeout and the network error are tested against a local `http.createServer` started by the test (one that never answers) and a closed port.
+- The provider simulator cannot be slow or unreachable, so the 5 s timeout and the network error are implemented but not tested. The `unknown` outcome is tested through the 504 of `lost-response`.
 - Parallel worktrees: `test:api` uses a test-only compose override that remaps the published ports (`ports: !override`), since the provider's `4010:4010` cannot be edited.
 
 Tests are written by the `test-writer` agent from signatures and rules, never from the implementation; expected values come from the statement.
@@ -666,7 +666,7 @@ In wave 3, T6 does not depend on T5's code but its tests need a sent reminder: T
 2. 200 or 202 → `delivered`; 422 → `rejected`; 503 → `not_delivered`; 504, network error or more than 5 s → `unknown`.
 3. Two sends with the same key deliver one message.
 
-**Tests.** Provider client level. **Depends on** T0.
+**Tests.** Provider client level, for what the simulator can produce: 200, 202, 422, 503 and 504. **Depends on** T0.
 
 ### T4. Appointments
 
