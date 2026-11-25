@@ -1,0 +1,9 @@
+# Used only by scripts/test-api.sh: publishes the stack on ports of this worktree,
+# so several worktrees can run their API tests at once.
+services:
+  api:
+    ports: !override
+      - "${API_PORT}:3000"
+  provider:
+    ports: !override
+      - "${PROVIDER_PORT}:4010"
