@@ -1,6 +1,6 @@
 # Architecture
 
-How this service is built. The statement (`README.md`, `enunciado.pdf`) and `openapi.yaml` define **what** it does; this document defines **how**. If a task needs something this document does not cover, stop and ask instead of inventing it.
+How this service is built. The statement (`enunciado.pdf`) and `openapi.yaml` define **what** it does; this document defines **how**. If a task needs something this document does not cover, stop and ask instead of inventing it.
 
 ## 1. Stack
 
@@ -606,7 +606,7 @@ In wave 3, T6 does not depend on T5's code but its tests need a sent reminder: T
 
 **Scope.** Everything shared, so later tasks do not edit the same files.
 - `package.json`, strict TypeScript, `@/` alias, ESLint (relative imports forbidden), Vitest, scripts `check` and `test:api`.
-- Harness: `AGENTS.md`, `CLAUDE.md`, `.claude/`, `.agents/`.
+- Harness: `AGENTS.md`, `CLAUDE.md`, the `test-writer` agent and the `implementation` and `implement-task` skills are already in the repo. Commit the rest of `.claude/` and `.agents/` as they are.
 - `Dockerfile`, `api` and `db` services, `schema.prisma` and the single migration of section 4, migrations at startup, `GET /health`.
 - GitHub CI on every push to `main`: `npm run check` and `npm run test:api`.
 - `infra/config.ts`, `infra/clock.ts`, `infra/db.ts`, `PUT /test/clock`.
