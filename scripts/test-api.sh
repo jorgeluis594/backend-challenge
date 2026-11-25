@@ -12,4 +12,7 @@ compose=(docker compose -p "clinicsay-$worktree_hash" -f docker-compose.yml -f d
 trap '"${compose[@]}" down --volumes' EXIT
 
 "${compose[@]}" up --build --detach --wait
-API_URL="http://localhost:$API_PORT" PROVIDER_URL="http://localhost:$PROVIDER_PORT" npx vitest run tests/api
+# Tests that import @/infra/config need DATABASE_URL to load it; they never query the
+# database (Prisma connects lazily), which is not published to the host.
+DATABASE_URL="postgresql://unused@localhost/unused" \
+  API_URL="http://localhost:$API_PORT" PROVIDER_URL="http://localhost:$PROVIDER_PORT" npx vitest run tests/api
