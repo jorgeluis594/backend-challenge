@@ -121,15 +121,13 @@ Con más tiempo:
 
 **Carga.** 500 clínicas y unos 20 000 recordatorios al día son menos de uno por segundo de media, pero con un pico a las 09:00 locales, cuando termina la franja sin envíos y salen los aplazados de la noche. La pasada debería tomar los recordatorios en lotes acotados en vez de todos los que tocan, y puede correr en varias instancias a la vez gracias a la reserva condicional.
 
-**Disparo.** Un cron cada minuto ejecuta [`scripts/run-reminder-pass.sh`](scripts/run-reminder-pass.sh), que llama a `POST /jobs/reminders/run` y sale con error si la API no responde 2xx:
+**Disparo y caídas.** [`docker-compose.prod.yml`](docker-compose.prod.yml) es el stack de producción: sin `CLOCK_MODE`, con `restart: unless-stopped` en todos los servicios y un servicio `cron` que cada minuto ejecuta [`scripts/run-reminder-pass.sh`](scripts/run-reminder-pass.sh).
 
+```sh
+POSTGRES_PASSWORD=... PROVIDER_URL=https://... docker compose -f docker-compose.prod.yml up -d --build
 ```
-* * * * * API_URL=https://api.example.com /ruta/al/repo/scripts/run-reminder-pass.sh
-```
 
-No está activado en `docker compose`: ahí la pasada la lanzan los tests, que controlan la hora con `PUT /test/clock`. En producción usaría un scheduler gestionado (un CronJob de Kubernetes o el del proveedor cloud) antes que el cron de una máquina, para no depender de que esa máquina siga viva.
-
-**Si el cron o el servicio se caen.** No se pierde nada: la cola es la tabla `reminders`, no la memoria del proceso. Un recordatorio que no salió sigue `pending` con su hora, y la primera pasada que corra después lo envía, también sus reintentos. Lanzar el cron desde dos sitios a la vez es seguro, porque cada intento se reserva antes de llamar al proveedor. Lo que hace falta es enterarse: la alerta de recordatorios pendientes con retraso (abajo) salta tanto si muere el cron como si la API no responde, y el orquestador reinicia el contenedor cuando `GET /health` deja de dar 200.
+El stack de `docker compose up --build` no lleva `cron`: ahí la pasada la lanzan los tests, que controlan la hora con `PUT /test/clock`.
 
 **WhatsApp real.**
 - Plantillas aprobadas de antemano: un recordatorio fuera de la ventana de 24 h solo puede ir como plantilla, así que el texto pasa a ser una plantilla con variables.

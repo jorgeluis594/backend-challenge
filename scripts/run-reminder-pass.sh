@@ -1,7 +1,11 @@
-#!/usr/bin/env bash
-# Runs one reminder pass. Meant for a cron job every minute in production:
-#   * * * * * API_URL=https://api.example.com /path/to/scripts/run-reminder-pass.sh
-# Exits non-zero when the API does not answer 2xx, so the scheduler records the failure.
-set -euo pipefail
+#!/bin/sh
+# Runs one reminder pass. The `cron` service of docker-compose.prod.yml calls it every minute.
+# Exits non-zero when the API does not answer 2xx.
+set -eu
 
-curl --fail --silent --show-error --max-time 50 -X POST "${API_URL:-http://localhost:3000}/jobs/reminders/run"
+url="${API_URL:-http://localhost:3000}/jobs/reminders/run"
+if ! wget -q -O - --post-data='' "$url"; then
+  echo "reminder pass failed: $url" >&2
+  exit 1
+fi
+echo
