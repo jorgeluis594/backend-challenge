@@ -124,10 +124,10 @@ Con más tiempo:
 **Disparo y caídas.** [`docker-compose.prod.yml`](docker-compose.prod.yml) es el stack de producción: sin `CLOCK_MODE`, con `restart: unless-stopped` en todos los servicios y un servicio `cron` que cada minuto ejecuta [`scripts/run-reminder-pass.sh`](scripts/run-reminder-pass.sh).
 
 ```sh
-POSTGRES_PASSWORD=... PROVIDER_URL=https://... docker compose -f docker-compose.prod.yml up -d --build
+POSTGRES_PASSWORD=... docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-El stack de `docker compose up --build` no lleva `cron`: ahí la pasada la lanzan los tests, que controlan la hora con `PUT /test/clock`.
+Mientras no haya un proveedor real, `PROVIDER_URL` apunta por defecto al simulador de `provider/`. El stack de `docker compose up --build` no lleva `cron`: ahí la pasada la lanzan los tests, que controlan la hora con `PUT /test/clock`.
 
 **WhatsApp real.**
 - Plantillas aprobadas de antemano: un recordatorio fuera de la ventana de 24 h solo puede ir como plantilla, así que el texto pasa a ser una plantilla con variables.

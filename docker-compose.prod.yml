@@ -1,7 +1,9 @@
 # Production stack. Docker restarts any service whose process dies, and `cron` launches the
 # reminder pass every minute. CLOCK_MODE is not set, so PUT /test/clock does not exist.
 #
-#   POSTGRES_PASSWORD=... PROVIDER_URL=https://... docker compose -f docker-compose.prod.yml up -d --build
+# Until there is a real message provider, PROVIDER_URL defaults to the simulator of provider/.
+#
+#   POSTGRES_PASSWORD=... docker compose -f docker-compose.prod.yml up -d --build
 services:
   api:
     build: .
@@ -10,10 +12,12 @@ services:
       - "${API_PORT:-3000}:3000"
     environment:
       DATABASE_URL: postgresql://clinicsay:${POSTGRES_PASSWORD:?}@db:5432/clinicsay
-      PROVIDER_URL: ${PROVIDER_URL:?}
+      PROVIDER_URL: ${PROVIDER_URL:-http://provider:4010}
     depends_on:
       db:
         condition: service_healthy
+      provider:
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
       interval: 10s
@@ -30,6 +34,10 @@ services:
     depends_on:
       api:
         condition: service_healthy
+
+  provider:
+    build: ./provider
+    restart: unless-stopped
 
   db:
     image: postgres:16-alpine
