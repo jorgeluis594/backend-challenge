@@ -142,6 +142,7 @@ Usé Claude Code como pareja para el diseño, y Orca para lanzar por cada tarea 
 
 Lo que corregí yo:
 
+- Propuse el modelado base de la base de datos, y la firma y el comportamiento de los casos de uso.
 - El primer diseño separaba reglas puras en `domain` y "orquestación" en `app`. Lo cambié a `domain` = solo tipos y toda la lógica en `app`.
 - Quité bloqueos y SQL a mano que sobraban para la tarea.
 - Renombré funciones cuyo nombre engañaba.
