@@ -29,19 +29,19 @@ src/
     reply.ts              parseReply
     timezone.ts           isValidTimezone
   app/                    use cases; orchestrate, never decide a business rule
-    ports.ts              contracts the use cases depend on (repositories, transaction, provider)
+    ports.ts              contracts the use cases depend on
     clinics.ts            makeCreateClinic
     patients.ts           makeCreatePatient
-    appointments.ts       makeCreateAppointment, makeRescheduleAppointment, makeCancelAppointment, makeGetAppointment
+    appointments.ts       create, reschedule, cancel and get appointment
     run-reminders.ts      makeRunReminderPass
     inbound-message.ts    makeHandleInboundMessage
   infra/                  everything that touches the outside world
     config.ts             environment, validated with Zod at startup
     clock.ts              now(), setClock()
     db.ts                 PrismaClient
-    repositories/         one file per repository + index.ts (repositories, transaction)
+    repositories/         one file per repository + index.ts
     provider/client.ts    sendMessage
-    use-cases/            one file per feature: injects real dependencies, exports ready functions
+    wiring/               injects real dependencies into the use cases, exports them ready
     http/
       app.ts              Express app, JSON parsing, 404, error handler
       validate.ts         Zod body validation helper
@@ -49,7 +49,7 @@ src/
       routes/             one file per resource
   main.ts                 migrate, connect, listen
 tests/
-  api/                    end-to-end over HTTP against the full docker compose stack
+  api/                    end-to-end over HTTP, full compose stack
   helpers/
 ```
 
@@ -58,7 +58,7 @@ Dependency direction:
 - `domain` imports nothing from `app` or `infra`.
 - `app` imports `domain`, its own `ports.ts`, and **one** thing from infra: `now` from `@/infra/clock`.
 - `infra` imports anything.
-- Routes import ready use cases from `@/infra/use-cases/*`; they never import `app` factories or repositories.
+- Routes import ready use cases from `@/infra/wiring/*`; they never import `app` factories or repositories.
 
 ## 3. Conventions
 
@@ -422,10 +422,10 @@ In one transaction:
 
 The message is stored in the same transaction that applies it: if applying fails, the provider's retry is processed again. The lookup is by phone, not by patient, because the same number can belong to several patients. A cancelled appointment is excluded from the lookup, so a SI after a NO is ignored.
 
-### Wiring (`infra/use-cases/<feature>.ts`)
+### Wiring (`infra/wiring/<feature>.ts`)
 
 ```ts
-// infra/use-cases/appointments.ts
+// infra/wiring/appointments.ts
 import { makeCreateAppointment, makeRescheduleAppointment } from '@/app/appointments';
 import { repositories, transaction } from '@/infra/repositories';
 import { config } from '@/infra/config';
@@ -512,7 +512,7 @@ In wave 3, T6 does not depend on T5's code but its tests need a sent reminder: T
 - `infra/repositories/index.ts` with `makeRepositories`, `repositories` and `transaction`; one file per repository whose methods throw `not implemented`.
 - Express app with JSON parsing, body validation helper, error format, 404, error mapping of section 9.
 - Every route of `openapi.yaml` registered in its resource file, answering 501.
-- `infra/use-cases/` with one empty file per feature.
+- `infra/wiring/` with one empty file per feature.
 - `tests/helpers/`: HTTP client, set clock, provider reset, create clinic, patient and appointment. Smoke test for `/health` and `/test/clock`.
 
 **Out of scope.** Any business rule: domain functions, use cases, repository bodies, provider client.
@@ -527,7 +527,7 @@ In wave 3, T6 does not depend on T5's code but its tests need a sent reminder: T
 ### T1. Clinics and patients
 
 **Scope.** `POST /clinics`, `POST /patients`; `createClinic`, `createPatient`; clinic and patient repositories; `isValidTimezone`.
-**Owns.** `app/clinics.ts`, `app/patients.ts`, `domain/timezone.ts`, `infra/repositories/{clinics,patients}.ts`, `infra/use-cases/{clinics,patients}.ts`, `infra/http/routes/{clinics,patients}.ts`.
+**Owns.** `app/clinics.ts`, `app/patients.ts`, `domain/timezone.ts`, `infra/repositories/{clinics,patients}.ts`, `infra/wiring/{clinics,patients}.ts`, `infra/http/routes/{clinics,patients}.ts`.
 
 **Acceptance.**
 1. A clinic with a name and a valid IANA zone → 201 with its `id`. A zone that does not exist → 400.
