@@ -317,6 +317,9 @@ export type ReminderRepository = Readonly<{
   /** Every pending reminder with next_attempt_at <= at (ORDER BY next_attempt_at, seq),
       each with its appointment, patient and clinic. */
   findDue(input: { at: Date }): Promise<readonly DueReminder[]>;
+  /** Reserves one attempt: only if the reminder is still pending with exactly `attempts`,
+      sets attempts + 1 and next_attempt_at = `until`. false when another pass got it first. */
+  claim(input: { id: ReminderId; attempts: number; until: Date }): Promise<boolean>;
   /** Writes only if the reminder is still pending (WHERE status = 'pending'). */
   settle(input: { id: ReminderId; settlement: ReminderSettlement }): Promise<void>;
 }>;
@@ -475,18 +478,20 @@ In one transaction: `appointments.findById`; missing → error; already cancelle
 No transaction and no lock. `reminders.findDue({ at: now() })`, then for each one, in order:
 
 1. `decideSend({ startsAt, phone, acceptsReminders, at: now() })`. `skip` → `settle` as `skipped` with the reason, without calling the provider.
-2. `provider.sendMessage({ to: decision.to, text: reminderText(...), idempotencyKey: reminder.id })`.
-3. `afterAttempt({ outcome, attempt: reminder.attempts + 1, attemptedAt: now() })` → `settle`.
+2. `reminders.claim({ id, attempts: reminder.attempts, until: now() + 1 minute })`. `false` → another pass has this attempt; go to the next reminder.
+3. `provider.sendMessage({ to: decision.to, text: reminderText(...), idempotencyKey: reminder.id })`.
+4. `afterAttempt({ outcome, attempt: reminder.attempts + 1, attemptedAt: now() })` → `settle`.
 
-`processed` is the number of reminders in the list.
+`processed` is the number of reminders this pass settled.
 
 What holds and what does not:
 
-- **One message per reminder, always.** Two concurrent passes may both call the provider for the same reminder, but with the same `Idempotency-Key`; the provider delivers once and both passes settle it as `sent`.
+- **One provider call per attempt.** The statement asks that concurrent passes never call the provider twice for the same attempt. `claim` is one conditional `updateMany` (`WHERE id AND status = 'pending' AND attempts = <value read>`): of the passes that read the same reminder, exactly one updates a row and sends. It also moves `next_attempt_at` one minute ahead, so a pass that starts while the call is in flight does not see the reminder as due. One minute is longer than the 5 s provider timeout.
+- **One message per reminder, always.** Every attempt of a reminder uses the same `Idempotency-Key`, so the provider delivers once.
 - A reminder that fails stays `pending` with a later `next_attempt_at`; a later pass picks it up. A retry is never a wait inside the pass.
 - `decideSend` runs before every attempt, so retries are also dropped as `too_late`.
-- If the process dies after the provider accepted, the reminder is still `pending`; the next pass resends with the same key and the provider deduplicates.
-- **Accepted trade-off:** with simultaneous passes, `processed` and `attempts` can count the same reminder twice. Avoiding it needs a row lock held during the provider call; it was left out to keep the code simple. `settle` only writes when the reminder is still `pending`, so a slower pass never overwrites a final state.
+- If the process dies after the provider accepted, the reminder is still `pending` with the attempt counted; a pass after the claim minute resends with the same key and the provider deduplicates.
+- `settle` only writes when the reminder is still `pending`, so it never overwrites a final state.
 - Reschedule, cancel and the webhook use a transaction only so their writes land together; the unique index on pending reminders is the guard against two live reminders for one appointment.
 
 ### `handleInboundMessage` — deps `{ transaction }`
@@ -701,7 +706,7 @@ In wave 3, T6 does not depend on T5's code but its tests need a sent reminder: T
 
 ### T5. Send pass
 
-**Scope.** `POST /jobs/reminders/run`, `runReminderPass`, `findDue`, `settle`.
+**Scope.** `POST /jobs/reminders/run`, `runReminderPass`, `findDue`, `claim`, `settle`.
 **Owns.** `app/run-reminder-pass.ts`, `infra/wiring/reminders.ts`, `infra/http/routes/jobs.ts`; in `infra/repositories/reminders.ts` only the two methods above.
 
 **Acceptance.**
@@ -712,7 +717,7 @@ In wave 3, T6 does not depend on T5's code but its tests need a sent reminder: T
 5. Provider unavailable → retry at +1 min and +5 min; third failure → `failed`. Retries do not wait for quiet hours.
 6. Lost response or more than 5 s → retry with the same `Idempotency-Key`; the patient gets one message.
 7. Provider rejection (422) → `failed` with no retry.
-8. Several concurrent passes deliver one message per reminder (checked with `/admin/messages`).
+8. Several concurrent passes deliver one message per reminder and call the provider once per attempt (checked with the provider's `/admin` endpoints).
 9. A cancelled or rescheduled appointment does not send its previous reminder.
 
 **Tests.** API, with the provider's `/admin/rules`. **Depends on** T3, T4.
