@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { sendError, sendInvalidBody } from '@/infra/http/errors';
 import { appointmentIdSchema, clinicIdSchema, createAppointmentSchema, patientIdSchema } from '@/infra/http/schemas';
-import { createAppointment, getAppointment } from '@/infra/wiring/appointments';
+import { cancelAppointment, createAppointment, getAppointment } from '@/infra/wiring/appointments';
 
 export const appointmentsRouter = Router();
 
@@ -29,6 +29,10 @@ appointmentsRouter.patch('/appointments/:id', (_req, res) => {
   res.status(501).json({ error: 'Not implemented' });
 });
 
-appointmentsRouter.post('/appointments/:id/cancel', (_req, res) => {
-  res.status(501).json({ error: 'Not implemented' });
+appointmentsRouter.post('/appointments/:id/cancel', async (req, res) => {
+  const id = appointmentIdSchema.safeParse(req.params.id);
+  if (!id.success) return sendError(res, 'APPOINTMENT_NOT_FOUND');
+  const appointment = await cancelAppointment({ id: id.data });
+  if (!appointment.success) return sendError(res, appointment.error);
+  res.json(appointment.data);
 });

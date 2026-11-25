@@ -428,3 +428,121 @@ describe('GET /appointments/:id', () => {
     expect(response.body).toEqual({ error: expect.any(String) });
   });
 });
+
+describe('POST /appointments/:id/cancel', () => {
+  test('answers 200 with the appointment cancelled and its pending reminder cancelled, dates in UTC ending in Z', async () => {
+    await setClock('2027-03-01T08:00:00Z');
+    const clinic = await createClinic({ name: 'Clínica Cancelación', timezone: 'Europe/Madrid' });
+    const patient = await createPatient({ clinicId: clinic.id, name: 'Alba', phone: '+34600140501', acceptsReminders: true });
+    const created = await createAppointment({ clinicId: clinic.id, patientId: patient.id, startsAt: '2027-03-10T09:00:00Z' });
+
+    const response = await request('POST', `/appointments/${created.id}/cancel`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      id: created.id,
+      clinicId: clinic.id,
+      patientId: patient.id,
+      startsAt: '2027-03-10T09:00:00.000Z',
+      status: 'cancelled',
+      reminders: [
+        {
+          id: created.reminders[0]?.id,
+          scheduledFor: '2027-03-09T09:00:00.000Z',
+          status: 'cancelled',
+          attempts: 0,
+          sentAt: null,
+          skipReason: null,
+        },
+      ],
+    });
+  });
+
+  test('a later GET shows the appointment and its reminder cancelled', async () => {
+    await setClock('2027-03-01T08:00:00Z');
+    const clinic = await createClinic({ name: 'Clínica Cancelación Consultada', timezone: 'Europe/Madrid' });
+    const patient = await createPatient({ clinicId: clinic.id, name: 'Blas', phone: '+34600140502', acceptsReminders: true });
+    const created = await createAppointment({ clinicId: clinic.id, patientId: patient.id, startsAt: '2027-03-10T09:00:00Z' });
+    await request('POST', `/appointments/${created.id}/cancel`);
+
+    const response = await request('GET', `/appointments/${created.id}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      id: created.id,
+      clinicId: clinic.id,
+      patientId: patient.id,
+      startsAt: '2027-03-10T09:00:00.000Z',
+      status: 'cancelled',
+      reminders: [
+        {
+          id: created.reminders[0]?.id,
+          scheduledFor: '2027-03-09T09:00:00.000Z',
+          status: 'cancelled',
+          attempts: 0,
+          sentAt: null,
+          skipReason: null,
+        },
+      ],
+    });
+  });
+
+  test('a reminder born skipped as too_late stays skipped as too_late', async () => {
+    await setClock('2027-03-09T21:30:00Z'); // Tuesday 22:30 in Madrid
+    const clinic = await createClinic({ name: 'Clínica Cancelación Tardía', timezone: 'Europe/Madrid' });
+    const patient = await createPatient({ clinicId: clinic.id, name: 'Celia', phone: '+34600140503', acceptsReminders: true });
+    const created = await createAppointment({
+      clinicId: clinic.id,
+      patientId: patient.id,
+      startsAt: '2027-03-10T07:00:00Z', // Wednesday 08:00 in Madrid, before quiet hours end
+    });
+
+    const response = await request('POST', `/appointments/${created.id}/cancel`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      id: created.id,
+      clinicId: clinic.id,
+      patientId: patient.id,
+      startsAt: '2027-03-10T07:00:00.000Z',
+      status: 'cancelled',
+      reminders: [
+        {
+          id: created.reminders[0]?.id,
+          scheduledFor: created.reminders[0]?.scheduledFor,
+          status: 'skipped',
+          attempts: 0,
+          sentAt: null,
+          skipReason: 'too_late',
+        },
+      ],
+    });
+  });
+
+  test('cancelling an appointment that is already cancelled answers 200 with the same body as the first time', async () => {
+    await setClock('2027-03-01T08:00:00Z');
+    const clinic = await createClinic({ name: 'Clínica Doble Cancelación', timezone: 'Europe/Madrid' });
+    const patient = await createPatient({ clinicId: clinic.id, name: 'Darío', phone: '+34600140504', acceptsReminders: true });
+    const created = await createAppointment({ clinicId: clinic.id, patientId: patient.id, startsAt: '2027-03-10T09:00:00Z' });
+    const first = await request('POST', `/appointments/${created.id}/cancel`);
+
+    const second = await request('POST', `/appointments/${created.id}/cancel`);
+
+    expect(second.status).toBe(200);
+    expect(second.body).toEqual(first.body);
+  });
+
+  test('answers 404 with an error message when the id is a UUID of no appointment', async () => {
+    const response = await request('POST', `/appointments/${UNKNOWN_UUID}/cancel`);
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: expect.any(String) });
+  });
+
+  test('answers 404 with an error message when the id is not a UUID', async () => {
+    const response = await request('POST', '/appointments/not-a-uuid/cancel');
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: expect.any(String) });
+  });
+});

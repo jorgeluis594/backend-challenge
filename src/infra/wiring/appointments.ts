@@ -1,7 +1,8 @@
+import { makeCancelAppointment } from '@/app/cancel-appointment';
 import { makeCreateAppointment } from '@/app/create-appointment';
 import { makeGetAppointment } from '@/app/get-appointment';
 import { config } from '@/infra/config';
-import { repositories } from '@/infra/repositories';
+import { repositories, transaction } from '@/infra/repositories';
 
 export const createAppointment = makeCreateAppointment({
   clinics: repositories.clinics,
@@ -10,3 +11,4 @@ export const createAppointment = makeCreateAppointment({
   quietHours: config.quietHours,
 });
 export const getAppointment = makeGetAppointment({ appointments: repositories.appointments });
+export const cancelAppointment = makeCancelAppointment({ transaction });

@@ -48,7 +48,6 @@ describe('test clock', () => {
 describe('routes of the contract not built yet', () => {
   test.each([
     ['PATCH', '/appointments/any-id'],
-    ['POST', '/appointments/any-id/cancel'],
     ['POST', '/jobs/reminders/run'],
     ['POST', '/webhooks/inbound-messages'],
   ] as const)('%s %s answers 501 with an error message', async (method, path) => {
