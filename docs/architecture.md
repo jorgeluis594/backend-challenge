@@ -61,7 +61,7 @@ src/
       schemas.ts                Zod schemas; the only place that turns raw input into domain types
       errors.ts                 use-case error → HTTP status and message
       routes/                   one file per resource
-  main.ts                       connect and listen
+  main.ts                       listen
 tests/
   api/                          end-to-end over HTTP, full compose stack
   helpers/
