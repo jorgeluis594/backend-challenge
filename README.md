@@ -129,13 +129,6 @@ POSTGRES_PASSWORD=... docker compose -f docker-compose.prod.yml up -d --build
 
 Mientras no haya un proveedor real, `PROVIDER_URL` apunta por defecto al simulador de `provider/`. El stack de `docker compose up --build` no lleva `cron`: ahí la pasada la lanzan los tests, que controlan la hora con `PUT /test/clock`.
 
-**WhatsApp real.**
-- Plantillas aprobadas de antemano: un recordatorio fuera de la ventana de 24 h solo puede ir como plantilla, así que el texto pasa a ser una plantilla con variables.
-- Límites de envío por número: respetarlos en la pasada y tratar el 429 como "no entregado, reintentar".
-- Confirmaciones de entrega por webhook: aceptado no es entregado. Guardaría el estado de entrega aparte del `sent` actual.
-- Bajas: un paciente que pide no recibir más mensajes pasa a `acceptsReminders = false`.
-- Verificar la firma de los webhooks entrantes antes de aplicarlos.
-
 **Despliegue.** Contenedores sin estado detrás de un balanceador; PostgreSQL gestionado con backups y restauración probada; las migraciones como paso del release, no al arrancar cada instancia; secretos fuera de la imagen (gestor de secretos del proveedor cloud); `CLOCK_MODE` nunca definido en producción.
 
 **Monitorización.**
