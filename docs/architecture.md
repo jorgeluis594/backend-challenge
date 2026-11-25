@@ -23,7 +23,7 @@ src/
   domain/                 pure functions and types; imports only luxon
     result.ts             Result<T, E>
     types.ts              Clinic, Patient, Appointment, Reminder and their unions
-    schedule.ts           scheduleReminder, beforeSend
+    schedule.ts           planReminder, decideSend
     message.ts            reminderText
     retry.ts              afterAttempt, SendOutcome
     reply.ts              parseReply
@@ -66,7 +66,7 @@ Dependency direction:
 2. **One named-object argument** for every use case, repository method and domain function with more than a bare value: `getAppointment({ id })`. The only exception is `parseReply(text)` and `isValidTimezone(timezone)`.
 3. **Expected failures are values**: use cases return `Result<T, E>` where `E` is a union of string literals. `throw` is only for bugs and infrastructure failures; the HTTP error handler turns those into 500.
 4. **Never `new Date()` for the current time.** Call `now()` from `@/infra/clock`, in the app layer only. Domain functions receive the instant as an argument named by intent (`notBefore`, `at`, `attemptedAt`).
-5. **UTC everywhere.** Instants are `Date` in code and `timestamptz` in the database. The clinic timezone is used in exactly two places: `scheduleReminder` and `reminderText`.
+5. **UTC everywhere.** Instants are `Date` in code and `timestamptz` in the database. The clinic timezone is used in exactly two places: `planReminder` and `reminderText`.
 6. **The domain is pure**: no database, clock, network or `process.env`.
 7. **Use cases are closures**: `makeX(deps)` returns `x(input)`. `deps` lists exactly what that use case uses.
 8. **No `any`, no non-null `!`.** `as` only where external data enters (raw SQL rows), right next to the query.
@@ -213,10 +213,10 @@ These four entity types are exactly the response bodies of `openapi.yaml`; route
 
 ```ts
 // schedule.ts — when the reminder goes out (rules 2 to 5)
-scheduleReminder(input: { startsAt: Date; timezone: string; notBefore: Date; quietHours: QuietHours }): ReminderPlan
+planReminder(input: { startsAt: Date; timezone: string; notBefore: Date; quietHours: QuietHours }): ReminderPlan
 
 // schedule.ts — what to do right before sending (rules 5 and 6). Check order: too_late, no_phone, opted_out
-beforeSend(input: { startsAt: Date; phone: string | null; acceptsReminders: boolean; at: Date }): SendDecision
+decideSend(input: { startsAt: Date; phone: string | null; acceptsReminders: boolean; at: Date }): SendDecision
 
 // message.ts — the exact text (rule 7), date and time in the clinic timezone
 reminderText(input: { patientName: string; clinicName: string; startsAt: Date; timezone: string }): string
@@ -233,15 +233,15 @@ isValidTimezone(timezone: string): boolean      // IANAZone.isValidZone
 
 Rules inside each function:
 
-- **`scheduleReminder`**: same local time on the previous calendar day in the clinic timezone (`minus({ days: 1 })`, not 24 h); moved out of quiet hours; if that is before `notBefore`, use `notBefore` and move out of quiet hours again; `too_late` when the result is not strictly before `startsAt`. Quiet hours: at `from` o'clock sending is already forbidden, at `until` o'clock it is allowed.
-- **`beforeSend`**: `too_late` when `at >= startsAt`; `no_phone` when `phone` is null; `opted_out` when `acceptsReminders` is false.
+- **`planReminder`**: same local time on the previous calendar day in the clinic timezone (`minus({ days: 1 })`, not 24 h); moved out of quiet hours; if that is before `notBefore`, use `notBefore` and move out of quiet hours again; `too_late` when the result is not strictly before `startsAt`. Quiet hours: at `from` o'clock sending is already forbidden, at `until` o'clock it is allowed.
+- **`decideSend`**: `too_late` when `at >= startsAt`; `no_phone` when `phone` is null; `opted_out` when `acceptsReminders` is false.
 - **`afterAttempt`**: `delivered` → `sent` with `sentAt = attemptedAt`; `rejected` → `failed`; `not_delivered` or `unknown` → attempt 1: `pending` at +1 min, attempt 2: `pending` at +5 min, attempt 3: `failed`. Retries ignore quiet hours.
 - **`parseReply`**: strip accents, lowercase, trim anything that is not a letter or digit from both ends; `si` → `confirm`, `no` → `cancel`, anything else → `null`.
 
 Reference implementation of the scheduling rule (verified against the DST and Canary cases of the statement):
 
 ```ts
-export function scheduleReminder(input: { startsAt: Date; timezone: string; notBefore: Date; quietHours: QuietHours }): ReminderPlan {
+export function planReminder(input: { startsAt: Date; timezone: string; notBefore: Date; quietHours: QuietHours }): ReminderPlan {
   const start    = DateTime.fromJSDate(input.startsAt,  { zone: input.timezone });
   const earliest = DateTime.fromJSDate(input.notBefore, { zone: input.timezone });
   let at = outOfQuietHours(start.minus({ days: 1 }), input.quietHours);
@@ -360,7 +360,7 @@ Each `makeX` takes only the dependencies listed. Signatures are those of the ret
 ```
 1. Clinic missing → `CLINIC_NOT_FOUND`. Patient missing → `PATIENT_NOT_FOUND`. Patient of another clinic → `PATIENT_NOT_IN_CLINIC`.
 2. `const at = now()`; `startsAt <= at` → `STARTS_AT_NOT_FUTURE`.
-3. `scheduleReminder({ startsAt, timezone: clinic.timezone, notBefore: at, quietHours })`.
+3. `planReminder({ startsAt, timezone: clinic.timezone, notBefore: at, quietHours })`.
 4. `appointments.create(...)` with that plan. No explicit transaction: the insert is atomic.
 
 ### `getAppointment` — deps `{ appointments }`
@@ -379,7 +379,7 @@ In one transaction:
 1. `appointments.lockById`. Missing → `APPOINTMENT_NOT_FOUND`.
 2. `startsAt <= now()` → `STARTS_AT_NOT_FUTURE`. Status `cancelled` → `APPOINTMENT_CANCELLED`. An appointment that already started **can** be rescheduled.
 3. Same instant as the current `startsAt` → return the appointment unchanged (rule 1: no second reminder for the same time).
-4. `reminders.cancelPending`; `appointments.update({ id, startsAt, status: 'scheduled' })`; `scheduleReminder` with the clinic timezone; `reminders.create`. The new reminder is created even when the previous one was already sent.
+4. `reminders.cancelPending`; `appointments.update({ id, startsAt, status: 'scheduled' })`; `planReminder` with the clinic timezone; `reminders.create`. The new reminder is created even when the previous one was already sent.
 5. Return `appointments.findById`.
 
 ### `cancelAppointment` — deps `{ transaction }`
@@ -397,7 +397,7 @@ In one transaction: lock; missing → error; already cancelled → return it unc
 Calls an internal `processNextReminder(): Promise<boolean>` until it returns `false`, counting the `true`s. Each call is one transaction with `timeoutMs: 15_000` (the Prisma default of 5 s equals the provider timeout and would abort mid-call):
 
 1. `reminders.lockNextDue({ at: now() })`. None → `false`.
-2. `beforeSend({ startsAt, phone, acceptsReminders, at: now() })`. `skip` → `settle` as `skipped` with the reason, without calling the provider → `true`.
+2. `decideSend({ startsAt, phone, acceptsReminders, at: now() })`. `skip` → `settle` as `skipped` with the reason, without calling the provider → `true`.
 3. `provider.sendMessage({ to: phone, text: reminderText(...), idempotencyKey: reminder.id })`.
 4. `afterAttempt({ outcome, attempt: reminder.attempts + 1, attemptedAt: now() })` → `settle` with `attempts + 1` → `true`.
 
@@ -405,7 +405,7 @@ Why this is safe:
 
 - The row lock is held during the provider call, so two concurrent passes never send the same reminder; `SKIP LOCKED` makes the second pass move on instead of waiting.
 - A reminder that fails stays `pending` with a later `next_attempt_at`, so the same pass does not pick it again. A retry is never a wait inside the pass.
-- `beforeSend` runs before every attempt, so retries are also dropped as `too_late`.
+- `decideSend` runs before every attempt, so retries are also dropped as `too_late`.
 - If the process dies after the provider accepted, the reminder is still `pending`; the next pass resends with the same `Idempotency-Key` and the provider deduplicates.
 - The pass locks only the reminder row, never the appointment, so it cannot deadlock with reschedule or cancel (which lock the appointment first and then wait for the reminder).
 
@@ -539,15 +539,15 @@ In wave 3, T6 does not depend on T5's code but its tests need a sent reminder: T
 
 ### T2. Reminder rules
 
-**Scope.** The five pure functions of section 6: `scheduleReminder`, `beforeSend`, `reminderText`, `afterAttempt`, `parseReply`.
+**Scope.** The five pure functions of section 6: `planReminder`, `decideSend`, `reminderText`, `afterAttempt`, `parseReply`.
 **Owns.** `domain/{schedule,message,retry,reply}.ts`. Nothing reachable through the API, so the reviewer does not run `/verify`.
 
 **Acceptance.**
-1. `scheduleReminder`: same local time on the previous day in the clinic zone; the statement's March and October DST cases and the Canary case give the expected instant.
+1. `planReminder`: same local time on the previous day in the clinic zone; the statement's March and October DST cases and the Canary case give the expected instant.
 2. A time inside quiet hours moves to their end; `from` o'clock is quiet, `until` o'clock is not.
 3. A computed time already in the past becomes `notBefore`, and quiet hours apply again.
 4. Not before the appointment → `skipReason: 'too_late'`.
-5. `beforeSend`: `too_late`, `no_phone`, `opted_out`, checked in that order.
+5. `decideSend`: `too_late`, `no_phone`, `opted_out`, checked in that order.
 6. `reminderText`: the exact text of the statement, date and time in the clinic zone.
 7. `afterAttempt`: delivered → `sent`; rejected → `failed`; not delivered or unknown → +1 min, then +5 min, then `failed`.
 8. `parseReply`: SI and NO regardless of case, accents and surrounding punctuation; anything else is `null`.
