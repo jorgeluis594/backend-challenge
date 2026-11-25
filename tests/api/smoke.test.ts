@@ -47,7 +47,6 @@ describe('test clock', () => {
 
 describe('routes of the contract not built yet', () => {
   test.each([
-    ['POST', '/patients'],
     ['POST', '/appointments'],
     ['GET', '/appointments/any-id'],
     ['PATCH', '/appointments/any-id'],
