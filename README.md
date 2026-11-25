@@ -48,6 +48,16 @@ Variables de entorno de la API (`src/infra/config.ts`, validadas con Zod al arra
 | `CLOCK_MODE` | sin definir; `test` habilita `PUT /test/clock` |
 | `QUIET_HOURS_FROM`, `QUIET_HOURS_UNTIL` | 21 y 9 (hora local de la clínica) |
 
+### Servidor de prueba
+
+Hay una instancia desplegada con el stack de producción ([`docker-compose.prod.yml`](docker-compose.prod.yml)) en **https://clinicsay.kogozstaging.lat**:
+
+```sh
+curl https://clinicsay.kogozstaging.lat/health
+```
+
+Corre con el reloj real (`PUT /test/clock` responde 404), el servicio `cron` lanza la pasada cada minuto y los mensajes van al simulador de `provider/`, no a un proveedor real. Para los tests de la evaluación el stack es el de `docker compose up --build`.
+
 ## 2. Decisiones
 
 El detalle está en [`docs/architecture.md`](docs/architecture.md); aquí va el resumen y el porqué.
