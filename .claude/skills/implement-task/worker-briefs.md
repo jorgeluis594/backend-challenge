@@ -14,7 +14,8 @@ CHECKS: `npm run check` (lint, typecheck, unit tests) and `npm run test:api` (en
 ## Implementer
 
 ```text
-TASK: T<N> "<title>" of the implementation plan in docs/architecture.md. Read its Scope, Out of scope, Acceptance criteria and the design sections it references, and implement exactly that.
+READ FIRST: docs/architecture.md. Your task is "T<N>. <title>" in section 12 (Implementation plan); the design it implements is in sections <numbers and titles, e.g. 7 (Use cases that only compute)>. Open that file before anything else; do not search the repo for the design.
+TASK: T<N> "<title>". Read its Scope, Out of scope and Acceptance criteria, and implement exactly that.
 ALREADY MERGED IN YOUR BASE: <tasks and commits, or "nothing">.
 RUNNING IN PARALLEL: <sibling tasks and the files they own>.
 METHOD: follow the Implementation skill (.claude/skills/implementation/SKILL.md): small logical units, each one validated, tested by the test-writer agent and committed before the next. Do not write or edit tests yourself.
