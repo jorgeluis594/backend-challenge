@@ -1,11 +1,20 @@
 import type { Prisma } from '@prisma/client';
 import type { ClinicRepository } from '@/app/ports';
+import type { Clinic, ClinicId, Timezone } from '@/domain/clinic';
 
-export const makeClinicRepository = (_db: Prisma.TransactionClient): ClinicRepository => ({
-  create: async () => {
-    throw new Error('not implemented');
-  },
-  findById: async () => {
-    throw new Error('not implemented');
+type ClinicRow = Readonly<{ id: string; name: string; timezone: string }>;
+
+const toClinic = (row: ClinicRow): Clinic => ({
+  id: row.id as ClinicId,
+  name: row.name,
+  timezone: row.timezone as Timezone,
+});
+
+export const makeClinicRepository = (db: Prisma.TransactionClient): ClinicRepository => ({
+  create: async (input) => toClinic(await db.clinic.create({ data: input })),
+  findById: async ({ id }) => {
+    const row = await db.clinic.findUnique({ where: { id } });
+    if (!row) return null;
+    return toClinic(row);
   },
 });
