@@ -158,7 +158,7 @@ Lo que corregí yo:
 
 - Propuse el modelado base de la base de datos, y la firma y el comportamiento de los casos de uso.
 - El primer diseño separaba reglas puras en `domain` y "orquestación" en `app`. Lo cambié a `domain` = solo tipos y toda la lógica en `app`.
-- Quité bloqueos y SQL a mano que sobraban para la tarea.
+- Quité bloqueos y SQL a mano de la pasada de envío, donde sobraban. El bloqueo de fila sobre la cita lo añadí después porque sí hacía falta, como un método del repositorio.
 - Renombré funciones cuyo nombre engañaba.
 - Lo hice seguir `openapi.yaml` donde había elegido otra cosa (409 al reprogramar una cita que ya empezó).
 - Más tarde un test mostró que varias pasadas a la vez llamaban al proveedor más de una vez por intento, contra el enunciado. Elegí la reserva condicional en vez de bloqueos.
