@@ -68,7 +68,16 @@ export const makeAppointmentRepository = (db: Prisma.TransactionClient): Appoint
   update: async ({ id, ...changes }) => {
     await db.appointment.update({ where: { id }, data: changes });
   },
-  findLastRemindedByPhone: async () => {
-    throw new Error('not implemented');
+  findLastRemindedByPhone: async ({ phone, at }) => {
+    const reminder = await db.reminder.findFirst({
+      where: {
+        status: 'sent',
+        appointment: { status: { not: 'cancelled' }, startsAt: { gt: at }, patient: { phone } },
+      },
+      orderBy: [{ sentAt: 'desc' }, { seq: 'desc' }],
+      select: { appointmentId: true },
+    });
+    if (!reminder) return null;
+    return { id: reminder.appointmentId as AppointmentId };
   },
 });
