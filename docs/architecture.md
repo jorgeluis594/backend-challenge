@@ -15,63 +15,79 @@ How this service is built. The statement (`README.md`, `enunciado.pdf`) and `ope
 
 ## 2. Layers and folders
 
+Three folders, one question each:
+
+- **`domain/`** — what the data looks like. Types only, one file per entity. No functions.
+- **`app/`** — all the logic. One file per use case. Some use cases persist and some only compute; both live here.
+- **`infra/`** — everything that touches the outside world: database, provider, HTTP, environment, clock.
+
 ```
 prisma/
   schema.prisma
   migrations/
 src/
-  domain/                 pure functions and types; imports only luxon
-    result.ts             Result<T, E>
-    types.ts              Clinic, Patient, Appointment, Reminder and their unions
-    schedule.ts           planReminder, decideSend
-    message.ts            reminderText
-    retry.ts              afterAttempt, SendOutcome
-    reply.ts              parseReply
-    timezone.ts           isValidTimezone
-  app/                    use cases; orchestrate, never decide a business rule
-    ports.ts              contracts the use cases depend on
-    clinics.ts            makeCreateClinic
-    patients.ts           makeCreatePatient
-    appointments.ts       create, reschedule, cancel and get appointment
-    run-reminders.ts      makeRunReminderPass
-    inbound-message.ts    makeHandleInboundMessage
-  infra/                  everything that touches the outside world
-    config.ts             environment, validated with Zod at startup
-    clock.ts              now(), setClock()
-    db.ts                 PrismaClient
-    repositories/         one file per repository + index.ts
-    provider/client.ts    sendMessage
-    wiring/               injects real dependencies into the use cases, exports them ready
+  shared/
+    result.ts                   Result<T, E>, ok, fail
+  domain/                       types only
+    clinic.ts                   ClinicId, Timezone, Clinic
+    patient.ts                  PatientId, Phone, Patient
+    appointment.ts              AppointmentId, AppointmentStatus, Appointment
+    reminder.ts                 ReminderId, Reminder, SkipReason, ReminderPlan, QuietHours, …
+    inbound-message.ts          InboundMessage, Reply
+  app/                          one use case per file
+    ports.ts                    contracts the use cases depend on
+    create-clinic.ts
+    create-patient.ts
+    create-appointment.ts
+    get-appointment.ts
+    reschedule-appointment.ts
+    cancel-appointment.ts
+    run-reminder-pass.ts
+    handle-inbound-message.ts
+    plan-reminder.ts            computes only
+    decide-send.ts              computes only
+    reminder-text.ts            computes only
+    after-attempt.ts            computes only
+    parse-reply.ts              computes only
+  infra/
+    config.ts                   environment, validated with Zod at startup
+    clock.ts                    now(), setClock()
+    db.ts                       PrismaClient
+    repositories/               one file per repository + index.ts
+    provider/client.ts          sendMessage
+    wiring/                     injects real dependencies into the use cases, exports them ready
     http/
-      app.ts              Express app, JSON parsing, 404, error handler
-      validate.ts         Zod body validation helper
-      errors.ts           use-case error → HTTP status and message
-      routes/             one file per resource
-  main.ts                 migrate, connect, listen
+      app.ts                    Express app, JSON parsing, 404, error handler
+      schemas.ts                Zod schemas; the only place that turns raw input into domain types
+      errors.ts                 use-case error → HTTP status and message
+      routes/                   one file per resource
+  main.ts                       connect and listen
 tests/
-  api/                    end-to-end over HTTP, full compose stack
+  api/                          end-to-end over HTTP, full compose stack
   helpers/
 ```
 
 Dependency direction:
 
-- `domain` imports nothing from `app` or `infra`.
-- `app` imports `domain`, its own `ports.ts`, and **one** thing from infra: `now` from `@/infra/clock`.
+- `domain` imports only other `domain` files.
+- `app` imports `domain`, `shared`, other `app` files, and **one** thing from infra: `now` from `@/infra/clock`.
 - `infra` imports anything.
-- Routes import ready use cases from `@/infra/wiring/*`; they never import `app` factories or repositories.
+- Routes import ready use cases from `@/infra/wiring/*`; they never import an `app` file or a repository.
 
 ## 3. Conventions
 
-1. **Absolute imports only**: `@/domain/...`, `@/app/...`, `@/infra/...`. Never `./` or `../`.
-2. **One named-object argument** for every use case, repository method and domain function with more than a bare value: `getAppointment({ id })`. The only exception is `parseReply(text)` and `isValidTimezone(timezone)`.
-3. **Expected failures are values**: use cases return `Result<T, E>` where `E` is a union of string literals. `throw` is only for bugs and infrastructure failures; the HTTP error handler turns those into 500.
-4. **Never `new Date()` for the current time.** Call `now()` from `@/infra/clock`, in the app layer only. Domain functions receive the instant as an argument named by intent (`notBefore`, `at`, `attemptedAt`).
-5. **UTC everywhere.** Instants are `Date` in code and `timestamptz` in the database. The clinic timezone is used in exactly two places: `planReminder` and `reminderText`.
-6. **The domain is pure**: no database, clock, network or `process.env`.
-7. **Use cases are closures**: `makeX(deps)` returns `x(input)`. `deps` lists exactly what that use case uses.
-8. **No `any`, no non-null `!`.** `as` only where external data enters (raw SQL rows), right next to the query.
-9. **Zod schemas are the source of input types** (`z.infer`); domain and app types are written by hand and do not depend on Prisma types. Repositories map Prisma rows to domain types.
-10. **Exhaustiveness**: every `switch` over a union ends in a `never` check, and error-to-status maps are typed `Record<ErrorUnion, …>` so a new error does not compile until it is mapped.
+1. **Absolute imports only**: `@/domain/...`, `@/app/...`, `@/infra/...`, `@/shared/...`. Never `./` or `../`.
+2. **One named-object argument** for every use case and repository method: `getAppointment({ id })`. The only exception is `parseReply(text)`.
+3. **Two kinds of use case, same folder.**
+   - One that needs the database, the provider or the clock is a closure: `makeX(deps)` returns `x(input)`. `deps` lists exactly what it uses.
+   - One that only computes is a plain exported function with no `deps`. It never reads the clock: the instant comes as an argument named by intent (`notBefore`, `at`, `attemptedAt`).
+4. **Each use-case file exports its own types**: `XInput`, `XError` (when it can fail) and `XDeps` (when it has dependencies), next to the function.
+5. **Expected failures are values**: `Result<T, E>` where `E` is a union of string literals. `throw` is only for bugs and infrastructure failures; the HTTP error handler turns those into 500.
+6. **Never `new Date()` for the current time.** Call `now()` from `@/infra/clock`, only inside closure use cases.
+7. **UTC everywhere.** Instants are `Date` in code and `timestamptz` in the database. The clinic timezone is used in exactly two places: `planReminder` and `reminderText`.
+8. **Strong typing** (section 5): branded ids and values, `Readonly` entities, discriminated unions instead of nullable combinations. No `any`, no non-null `!`.
+9. **`as` only where a brand is minted**: the Zod schemas in `infra/http/schemas.ts` (input) and the row mappers in `infra/repositories/` (database). Nowhere else.
+10. **Exhaustiveness**: every `switch` over a union ends in a `never` check, and the error-to-status map is typed `Record<ErrorUnion, …>` so a new error does not compile until it is mapped.
 
 ## 4. Data model
 
@@ -157,96 +173,218 @@ Invariants the code relies on:
 - `scheduled_for` never changes after insert. `next_attempt_at` starts equal to it.
 - Reminders are ordered by `seq`, never by a timestamp (the test clock can freeze time).
 
-## 5. Types
+## 5. Types (`domain/`)
+
+Types only. Written by hand; they do not depend on Prisma or Zod types.
+
+Three techniques, used everywhere:
+
+- **Branded ids and values.** A `ClinicId` cannot be passed where a `PatientId` is expected, and a `Phone` is a string that already passed the E.164 check.
+- **`Readonly` entities.** A use case builds a new value; it never mutates one.
+- **Discriminated unions.** A reminder that is `sent` always has `sentAt`; one that is `skipped` always has `skipReason`. The impossible combinations do not typecheck.
 
 ```ts
-// domain/result.ts
+// shared/result.ts
 export type Result<T, E extends string> =
-  | { success: true; data: T }
-  | { success: false; error: E };
+  | Readonly<{ success: true; data: T }>
+  | Readonly<{ success: false; error: E }>;
 export const ok = <T>(data: T) => ({ success: true as const, data });
 export const fail = <E extends string>(error: E) => ({ success: false as const, error });
+```
 
-// domain/types.ts
-export type AppointmentStatus = 'scheduled' | 'confirmed' | 'cancelled';
-export type ReminderStatus = 'pending' | 'sent' | 'failed' | 'skipped' | 'cancelled';
+```ts
+// domain/clinic.ts
+export type ClinicId = string & { readonly __brand: 'ClinicId' };
+export type Timezone = string & { readonly __brand: 'Timezone' };   // an IANA zone that exists
+export type Clinic = Readonly<{ id: ClinicId; name: string; timezone: Timezone }>;
+```
+
+```ts
+// domain/patient.ts
+export type PatientId = string & { readonly __brand: 'PatientId' };
+export type Phone = string & { readonly __brand: 'Phone' };         // E.164
+export type Patient = Readonly<{
+  id: PatientId;
+  clinicId: ClinicId;
+  name: string;
+  phone: Phone | null;
+  acceptsReminders: boolean;
+}>;
+```
+
+```ts
+// domain/reminder.ts
+export type ReminderId = string & { readonly __brand: 'ReminderId' };   // also the provider Idempotency-Key
 export type SkipReason = 'too_late' | 'no_phone' | 'opted_out';
 
-export type Clinic = { id: string; name: string; timezone: string };
-export type Patient = { id: string; clinicId: string; name: string; phone: string | null; acceptsReminders: boolean };
-export type Reminder = {
-  id: string;
-  scheduledFor: Date;
-  status: ReminderStatus;
-  attempts: number;
-  sentAt: Date | null;
-  skipReason: SkipReason | null;
-};
-export type Appointment = {
-  id: string;
-  clinicId: string;
-  patientId: string;
+type ReminderBase = Readonly<{ id: ReminderId; scheduledFor: Date; attempts: number }>;
+export type Reminder = ReminderBase & (
+  | Readonly<{ status: 'pending' | 'failed' | 'cancelled'; sentAt: null; skipReason: null }>
+  | Readonly<{ status: 'sent'; sentAt: Date; skipReason: null }>
+  | Readonly<{ status: 'skipped'; sentAt: null; skipReason: SkipReason }>
+);
+export type ReminderStatus = Reminder['status'];
+
+export type QuietHours = Readonly<{ from: number; until: number }>;     // local clinic hours, 0–23
+
+/** How a reminder is born. */
+export type ReminderPlan =
+  | Readonly<{ status: 'pending'; scheduledFor: Date }>
+  | Readonly<{ status: 'skipped'; scheduledFor: Date; skipReason: 'too_late' }>;
+
+/** What to do right before calling the provider. */
+export type SendDecision =
+  | Readonly<{ action: 'send'; to: Phone }>
+  | Readonly<{ action: 'skip'; reason: SkipReason }>;
+
+/** What the provider answered. */
+export type SendOutcome = 'delivered' | 'rejected' | 'not_delivered' | 'unknown';
+
+/** How a reminder ends a pass. Also what the repository stores. */
+export type ReminderSettlement =
+  | Readonly<{ status: 'sent'; attempts: number; sentAt: Date }>
+  | Readonly<{ status: 'failed'; attempts: number }>
+  | Readonly<{ status: 'pending'; attempts: number; nextAttemptAt: Date }>
+  | Readonly<{ status: 'skipped'; skipReason: SkipReason }>;
+```
+
+```ts
+// domain/appointment.ts
+export type AppointmentId = string & { readonly __brand: 'AppointmentId' };
+export type AppointmentStatus = 'scheduled' | 'confirmed' | 'cancelled';
+export type Appointment = Readonly<{
+  id: AppointmentId;
+  clinicId: ClinicId;
+  patientId: PatientId;
   startsAt: Date;
   status: AppointmentStatus;
-  reminders: Reminder[];          // oldest → newest
-};
+  reminders: readonly Reminder[];       // oldest → newest
+}>;
+```
 
-// domain/schedule.ts
-export type QuietHours = { from: number; until: number };   // local clinic hours, 0–23
-export type ReminderPlan = { scheduledFor: Date; skipReason: 'too_late' | null };
-export type SendDecision = { action: 'send' } | { action: 'skip'; reason: SkipReason };
-
-// domain/retry.ts
-export type SendOutcome = 'delivered' | 'rejected' | 'not_delivered' | 'unknown';
-export type AttemptResult =
-  | { status: 'sent'; sentAt: Date }
-  | { status: 'failed' }
-  | { status: 'pending'; nextAttemptAt: Date };
-
-// domain/reply.ts
+```ts
+// domain/inbound-message.ts
+export type InboundMessage = Readonly<{ messageId: string; from: string; text: string; receivedAt: Date }>;
 export type Reply = 'confirm' | 'cancel';
 ```
 
-These four entity types are exactly the response bodies of `openapi.yaml`; routes return them as they are and `res.json` serialises each `Date` as UTC with `Z`. `seq` and `nextAttemptAt` never leave the repositories.
+`Clinic`, `Patient`, `Appointment` and `Reminder` are exactly the response bodies of `openapi.yaml`: routes return them as they are, and `res.json` serialises each `Date` as UTC with `Z`. `seq` and `nextAttemptAt` exist only in the database and never appear in an entity.
 
-## 6. Domain
+Where brands are minted (the only two places with `as`):
+
+- **Input**: `infra/http/schemas.ts`. `Timezone` passes `IANAZone.isValidZone`; `Phone` passes `^\+[1-9]\d{7,14}$`; ids pass a UUID check.
+- **Database**: the row mappers in `infra/repositories/`, which also build the `Reminder` union from the row's `status`.
+
+## 6. Ports (`app/ports.ts`)
+
+What the use cases need from the outside. `infra` implements them.
 
 ```ts
-// schedule.ts — when the reminder goes out (rules 2 to 5)
-planReminder(input: { startsAt: Date; timezone: string; notBefore: Date; quietHours: QuietHours }): ReminderPlan
+export type ClinicRepository = Readonly<{
+  create(input: { name: string; timezone: Timezone }): Promise<Clinic>;
+  findById(input: { id: ClinicId }): Promise<Clinic | null>;
+}>;
 
-// schedule.ts — what to do right before sending (rules 5 and 6). Check order: too_late, no_phone, opted_out
-decideSend(input: { startsAt: Date; phone: string | null; acceptsReminders: boolean; at: Date }): SendDecision
+export type PatientRepository = Readonly<{
+  create(input: { clinicId: ClinicId; name: string; phone: Phone | null; acceptsReminders: boolean }): Promise<Patient>;
+  findById(input: { id: PatientId }): Promise<Patient | null>;
+}>;
 
-// message.ts — the exact text (rule 7), date and time in the clinic timezone
-reminderText(input: { patientName: string; clinicName: string; startsAt: Date; timezone: string }): string
+export type AppointmentRepository = Readonly<{
+  /** Inserts the appointment and its first reminder atomically. */
+  create(input: { clinicId: ClinicId; patientId: PatientId; startsAt: Date; reminder: ReminderPlan }): Promise<Appointment>;
+  findById(input: { id: AppointmentId }): Promise<Appointment | null>;
+  /** SELECT … FOR UPDATE. Only inside a transaction. */
+  lockById(input: { id: AppointmentId }): Promise<Appointment | null>;
+  update(input: { id: AppointmentId; startsAt?: Date; status?: AppointmentStatus }): Promise<void>;
+  /** Locks the appointment of the last reminder sent to that phone, among appointments
+      that are not cancelled and start after `at`. Only inside a transaction. */
+  lockLastRemindedByPhone(input: { phone: string; at: Date }): Promise<{ id: AppointmentId } | null>;
+}>;
 
-// retry.ts — what happens after an attempt. `attempt` is the one just made: 1, 2 or 3
-afterAttempt(input: { outcome: SendOutcome; attempt: number; attemptedAt: Date }): AttemptResult
+/** A pending reminder with everything needed to decide and send it. */
+export type DueReminder = Readonly<{
+  id: ReminderId;
+  attempts: number;
+  appointment: Readonly<{ startsAt: Date }>;
+  patient: Readonly<{ name: string; phone: Phone | null; acceptsReminders: boolean }>;
+  clinic: Readonly<{ name: string; timezone: Timezone }>;
+}>;
 
-// reply.ts
-parseReply(text: string): Reply | null
+export type ReminderRepository = Readonly<{
+  create(input: { appointmentId: AppointmentId; plan: ReminderPlan }): Promise<void>;
+  /** pending → cancelled for that appointment. No-op when there is none. */
+  cancelPending(input: { appointmentId: AppointmentId }): Promise<void>;
+  /** Oldest pending reminder with next_attempt_at <= at, FOR UPDATE SKIP LOCKED. Only inside a transaction. */
+  lockNextDue(input: { at: Date }): Promise<DueReminder | null>;
+  settle(input: { id: ReminderId; settlement: ReminderSettlement }): Promise<void>;
+}>;
 
-// timezone.ts
-isValidTimezone(timezone: string): boolean      // IANAZone.isValidZone
+export type InboundMessageRepository = Readonly<{
+  /** false when that messageId was already stored. */
+  insertIfNew(input: InboundMessage): Promise<boolean>;
+}>;
+
+export type Repositories = Readonly<{
+  clinics: ClinicRepository;
+  patients: PatientRepository;
+  appointments: AppointmentRepository;
+  reminders: ReminderRepository;
+  inboundMessages: InboundMessageRepository;
+}>;
+
+/** Runs `work` in one database transaction, with repositories bound to it. */
+export type Transaction = <T>(work: (repos: Repositories) => Promise<T>, options?: { timeoutMs?: number }) => Promise<T>;
+
+export type ProviderClient = Readonly<{
+  sendMessage(input: { to: Phone; text: string; idempotencyKey: ReminderId }): Promise<SendOutcome>;
+}>;
 ```
 
-Rules inside each function:
+Repository rules:
 
-- **`planReminder`**: same local time on the previous calendar day in the clinic timezone (`minus({ days: 1 })`, not 24 h); moved out of quiet hours; if that is before `notBefore`, use `notBefore` and move out of quiet hours again; `too_late` when the result is not strictly before `startsAt`. Quiet hours: at `from` o'clock sending is already forbidden, at `until` o'clock it is allowed.
-- **`decideSend`**: `too_late` when `at >= startsAt`; `no_phone` when `phone` is null; `opted_out` when `acceptsReminders` is false.
-- **`afterAttempt`**: `delivered` → `sent` with `sentAt = attemptedAt`; `rejected` → `failed`; `not_delivered` or `unknown` → attempt 1: `pending` at +1 min, attempt 2: `pending` at +5 min, attempt 3: `failed`. Retries ignore quiet hours.
+- A `pending` plan is stored with `next_attempt_at = scheduled_for`; a `skipped` plan is stored with its reason.
+- Every `Appointment` returned carries its reminders ordered by `seq`.
+
+## 7. Use cases that only compute
+
+Plain functions, no `deps`, no I/O. Unit-tested with tables of inputs and outputs.
+
+```ts
+// plan-reminder.ts — when the reminder goes out (rules 2 to 5)
+planReminder(input: { startsAt: Date; timezone: Timezone; notBefore: Date; quietHours: QuietHours }): ReminderPlan
+
+// decide-send.ts — send or skip, right before each attempt (rules 5 and 6)
+decideSend(input: { startsAt: Date; phone: Phone | null; acceptsReminders: boolean; at: Date }): SendDecision
+
+// reminder-text.ts — the exact text (rule 7)
+reminderText(input: { patientName: string; clinicName: string; startsAt: Date; timezone: Timezone }): string
+
+// after-attempt.ts — what happens after a provider call. `attempt` is the one just made: 1, 2 or 3
+afterAttempt(input: { outcome: SendOutcome; attempt: number; attemptedAt: Date }): ReminderSettlement
+
+// parse-reply.ts
+parseReply(text: string): Reply | null
+```
+
+Rules inside each one:
+
+- **`planReminder`**: same local time on the previous calendar day in the clinic timezone (`minus({ days: 1 })`, not 24 h); moved out of quiet hours; if that is before `notBefore`, use `notBefore` and move out of quiet hours again; `skipped` with `too_late` when the result is not strictly before `startsAt`. Quiet hours: at `from` o'clock sending is already forbidden, at `until` o'clock it is allowed.
+- **`decideSend`**, checked in this order: `too_late` when `at >= startsAt`; `no_phone` when `phone` is null; `opted_out` when `acceptsReminders` is false. Otherwise `send`, carrying the non-null phone as `to`.
+- **`reminderText`**: `Hola {patientName}, te recordamos tu cita en {clinicName} el {dd/MM/yyyy} a las {HH:mm}. Responde SI para confirmar o NO para cancelar.` with the date and time of `startsAt` in the clinic timezone.
+- **`afterAttempt`**: `delivered` → `sent` with `sentAt = attemptedAt`; `rejected` → `failed`; `not_delivered` or `unknown` → attempt 1: `pending` at +1 min, attempt 2: `pending` at +5 min, attempt 3: `failed`. `attempts` in the result is `attempt`. Retries ignore quiet hours.
 - **`parseReply`**: strip accents, lowercase, trim anything that is not a letter or digit from both ends; `si` → `confirm`, `no` → `cancel`, anything else → `null`.
 
 Reference implementation of the scheduling rule (verified against the DST and Canary cases of the statement):
 
 ```ts
-export function planReminder(input: { startsAt: Date; timezone: string; notBefore: Date; quietHours: QuietHours }): ReminderPlan {
+export function planReminder(input: PlanReminderInput): ReminderPlan {
   const start    = DateTime.fromJSDate(input.startsAt,  { zone: input.timezone });
   const earliest = DateTime.fromJSDate(input.notBefore, { zone: input.timezone });
   let at = outOfQuietHours(start.minus({ days: 1 }), input.quietHours);
   if (at < earliest) at = outOfQuietHours(earliest, input.quietHours);
-  return { scheduledFor: at.toJSDate(), skipReason: at < start ? null : 'too_late' };
+  const scheduledFor = at.toJSDate();
+  return at < start ? { status: 'pending', scheduledFor } : { status: 'skipped', scheduledFor, skipReason: 'too_late' };
 }
 
 function outOfQuietHours(t: DateTime, { from, until }: QuietHours): DateTime {
@@ -258,104 +396,28 @@ function outOfQuietHours(t: DateTime, { from, until }: QuietHours): DateTime {
 }
 ```
 
-## 7. Ports (`app/ports.ts`)
+## 8. Use cases that persist
 
-What the use cases need from the outside. `infra` implements them.
-
-```ts
-export type ClinicRepository = {
-  create(input: { name: string; timezone: string }): Promise<Clinic>;
-  findById(input: { id: string }): Promise<Clinic | null>;
-};
-
-export type PatientRepository = {
-  create(input: { clinicId: string; name: string; phone: string | null; acceptsReminders: boolean }): Promise<Patient>;
-  findById(input: { id: string }): Promise<Patient | null>;
-};
-
-export type AppointmentRepository = {
-  /** Inserts the appointment and its first reminder atomically. */
-  create(input: { clinicId: string; patientId: string; startsAt: Date; reminder: ReminderPlan }): Promise<Appointment>;
-  findById(input: { id: string }): Promise<Appointment | null>;
-  /** SELECT … FOR UPDATE. Only inside a transaction. */
-  lockById(input: { id: string }): Promise<Appointment | null>;
-  update(input: { id: string; startsAt?: Date; status?: AppointmentStatus }): Promise<void>;
-  /** Locks the appointment of the last reminder sent to that phone, among appointments
-      that are not cancelled and start after `at`. Only inside a transaction. */
-  lockLastRemindedByPhone(input: { phone: string; at: Date }): Promise<{ id: string } | null>;
-};
-
-export type DueReminder = {
-  id: string;
-  attempts: number;
-  appointment: { startsAt: Date };
-  patient: { name: string; phone: string | null; acceptsReminders: boolean };
-  clinic: { name: string; timezone: string };
-};
-
-export type ReminderSettlement =
-  | { status: 'sent'; attempts: number; sentAt: Date }
-  | { status: 'failed'; attempts: number }
-  | { status: 'pending'; attempts: number; nextAttemptAt: Date }
-  | { status: 'skipped'; skipReason: SkipReason };
-
-export type ReminderRepository = {
-  create(input: { appointmentId: string; plan: ReminderPlan }): Promise<void>;
-  /** pending → cancelled for that appointment. No-op when there is none. */
-  cancelPending(input: { appointmentId: string }): Promise<void>;
-  /** Oldest pending reminder with next_attempt_at <= at, FOR UPDATE SKIP LOCKED. Only inside a transaction. */
-  lockNextDue(input: { at: Date }): Promise<DueReminder | null>;
-  settle(input: { id: string; settlement: ReminderSettlement }): Promise<void>;
-};
-
-export type InboundMessageRepository = {
-  /** false when that messageId was already stored. */
-  insertIfNew(input: { messageId: string; from: string; text: string; receivedAt: Date }): Promise<boolean>;
-};
-
-export type Repositories = {
-  clinics: ClinicRepository;
-  patients: PatientRepository;
-  appointments: AppointmentRepository;
-  reminders: ReminderRepository;
-  inboundMessages: InboundMessageRepository;
-};
-
-/** Runs `work` in one database transaction, with repositories bound to it. */
-export type Transaction = <T>(work: (repos: Repositories) => Promise<T>, options?: { timeoutMs?: number }) => Promise<T>;
-
-export type ProviderClient = {
-  sendMessage(input: { to: string; text: string; idempotencyKey: string }): Promise<SendOutcome>;
-};
-```
-
-Repository rules:
-
-- A `ReminderPlan` is stored as `pending` with `next_attempt_at = scheduled_for` when `skipReason` is null, and as `skipped` with that reason otherwise.
-- An id that is not a UUID is "not found": `findById` and `lockById` return `null` without querying.
-- Every `Appointment` returned carries its reminders ordered by `seq`.
-
-## 8. Use cases
-
-Each `makeX` takes only the dependencies listed. Signatures are those of the returned function.
+Closures. Each file exports `makeX`, and the types `XInput`, `XError`, `XDeps`. Signatures below are those of the returned function.
 
 ### `createClinic` — deps `{ clinics }`
 
 ```ts
-(input: { name: string; timezone: string }) => Promise<Result<Clinic, 'INVALID_TIMEZONE'>>
+(input: { name: string; timezone: Timezone }) => Promise<Clinic>
 ```
-`isValidTimezone` → insert.
+Cannot fail: an invalid timezone never becomes a `Timezone`.
 
 ### `createPatient` — deps `{ clinics, patients }`
 
 ```ts
-(input: { clinicId: string; name: string; phone: string | null; acceptsReminders: boolean }) => Promise<Result<Patient, 'CLINIC_NOT_FOUND'>>
+(input: { clinicId: ClinicId; name: string; phone: Phone | null; acceptsReminders: boolean }) =>
+  Promise<Result<Patient, 'CLINIC_NOT_FOUND'>>
 ```
 
 ### `createAppointment` — deps `{ clinics, patients, appointments, quietHours }`
 
 ```ts
-(input: { clinicId: string; patientId: string; startsAt: Date }) =>
+(input: { clinicId: ClinicId; patientId: PatientId; startsAt: Date }) =>
   Promise<Result<Appointment, 'CLINIC_NOT_FOUND' | 'PATIENT_NOT_FOUND' | 'PATIENT_NOT_IN_CLINIC' | 'STARTS_AT_NOT_FUTURE'>>
 ```
 1. Clinic missing → `CLINIC_NOT_FOUND`. Patient missing → `PATIENT_NOT_FOUND`. Patient of another clinic → `PATIENT_NOT_IN_CLINIC`.
@@ -366,13 +428,13 @@ Each `makeX` takes only the dependencies listed. Signatures are those of the ret
 ### `getAppointment` — deps `{ appointments }`
 
 ```ts
-(input: { id: string }) => Promise<Result<Appointment, 'APPOINTMENT_NOT_FOUND'>>
+(input: { id: AppointmentId }) => Promise<Result<Appointment, 'APPOINTMENT_NOT_FOUND'>>
 ```
 
 ### `rescheduleAppointment` — deps `{ transaction, quietHours }`
 
 ```ts
-(input: { id: string; startsAt: Date }) =>
+(input: { id: AppointmentId; startsAt: Date }) =>
   Promise<Result<Appointment, 'APPOINTMENT_NOT_FOUND' | 'STARTS_AT_NOT_FUTURE' | 'APPOINTMENT_CANCELLED'>>
 ```
 In one transaction:
@@ -385,7 +447,7 @@ In one transaction:
 ### `cancelAppointment` — deps `{ transaction }`
 
 ```ts
-(input: { id: string }) => Promise<Result<Appointment, 'APPOINTMENT_NOT_FOUND'>>
+(input: { id: AppointmentId }) => Promise<Result<Appointment, 'APPOINTMENT_NOT_FOUND'>>
 ```
 In one transaction: lock; missing → error; already cancelled → return it unchanged; otherwise `reminders.cancelPending`, `appointments.update({ id, status: 'cancelled' })`, return the fresh appointment.
 
@@ -398,8 +460,8 @@ Calls an internal `processNextReminder(): Promise<boolean>` until it returns `fa
 
 1. `reminders.lockNextDue({ at: now() })`. None → `false`.
 2. `decideSend({ startsAt, phone, acceptsReminders, at: now() })`. `skip` → `settle` as `skipped` with the reason, without calling the provider → `true`.
-3. `provider.sendMessage({ to: phone, text: reminderText(...), idempotencyKey: reminder.id })`.
-4. `afterAttempt({ outcome, attempt: reminder.attempts + 1, attemptedAt: now() })` → `settle` with `attempts + 1` → `true`.
+3. `provider.sendMessage({ to: decision.to, text: reminderText(...), idempotencyKey: reminder.id })`.
+4. `afterAttempt({ outcome, attempt: reminder.attempts + 1, attemptedAt: now() })` → `settle` → `true`.
 
 Why this is safe:
 
@@ -412,7 +474,7 @@ Why this is safe:
 ### `handleInboundMessage` — deps `{ transaction }`
 
 ```ts
-(input: { messageId: string; from: string; text: string; receivedAt: Date }) => Promise<'applied' | 'duplicate' | 'ignored'>
+(input: InboundMessage) => Promise<'applied' | 'duplicate' | 'ignored'>
 ```
 In one transaction:
 1. `inboundMessages.insertIfNew` (`ON CONFLICT DO NOTHING`). `false` → `duplicate`.
@@ -422,11 +484,32 @@ In one transaction:
 
 The message is stored in the same transaction that applies it: if applying fails, the provider's retry is processed again. The lookup is by phone, not by patient, because the same number can belong to several patients. A cancelled appointment is excluded from the lookup, so a SI after a NO is ignored.
 
+### Shape of a file
+
+```ts
+// app/create-appointment.ts
+export type CreateAppointmentInput = Readonly<{ clinicId: ClinicId; patientId: PatientId; startsAt: Date }>;
+export type CreateAppointmentError = 'CLINIC_NOT_FOUND' | 'PATIENT_NOT_FOUND' | 'PATIENT_NOT_IN_CLINIC' | 'STARTS_AT_NOT_FUTURE';
+export type CreateAppointmentDeps = Readonly<{
+  clinics: ClinicRepository;
+  patients: PatientRepository;
+  appointments: AppointmentRepository;
+  quietHours: QuietHours;
+}>;
+
+export const makeCreateAppointment =
+  (deps: CreateAppointmentDeps) =>
+  async (input: CreateAppointmentInput): Promise<Result<Appointment, CreateAppointmentError>> => { /* … */ };
+```
+
 ### Wiring (`infra/wiring/<feature>.ts`)
+
+One file per feature: `clinics`, `patients`, `appointments`, `reminders`, `inbound-messages`.
 
 ```ts
 // infra/wiring/appointments.ts
-import { makeCreateAppointment, makeRescheduleAppointment } from '@/app/appointments';
+import { makeCreateAppointment } from '@/app/create-appointment';
+import { makeRescheduleAppointment } from '@/app/reschedule-appointment';
 import { repositories, transaction } from '@/infra/repositories';
 import { config } from '@/infra/config';
 
@@ -443,21 +526,25 @@ export const rescheduleAppointment = makeRescheduleAppointment({ transaction, qu
 
 ## 9. HTTP
 
-A route does three things: validate the body with Zod, call the use case, map the result.
+A route does three things: parse the input with a Zod schema, call the use case, map the result.
 
-- **Input**: dates are `z.string().datetime({ offset: true })` transformed to `Date` (a date without zone is 400). Phone is `^\+[1-9]\d{7,14}$` or `null`; a missing `phone` is `null`. `name` has at least one character.
+- **Schemas** (`infra/http/schemas.ts`) return domain types, not raw strings:
+  - dates: `z.string().datetime({ offset: true })` → `Date` (a date without zone is 400);
+  - `timezone`: must pass `IANAZone.isValidZone` → `Timezone` (400 otherwise);
+  - `phone`: `^\+[1-9]\d{7,14}$` → `Phone`, or `null`; a missing `phone` is `null`;
+  - `name`: at least one character.
+- **Ids**, in the path or in the body: one that is not a UUID answers **404** with the same message as a missing entity, without calling the use case. A UUID becomes the branded id.
 - **Errors**: always `{ "error": "<message>" }`. Invalid body or malformed JSON → 400. Unknown route → 404. Unhandled exception → 500.
-- **Path ids** are not validated by the route; a malformed one comes back from the use case as not found.
 
 | Use-case error | Status |
 |---|---|
-| `INVALID_TIMEZONE`, `PATIENT_NOT_IN_CLINIC`, `STARTS_AT_NOT_FUTURE` | 400 |
+| `PATIENT_NOT_IN_CLINIC`, `STARTS_AT_NOT_FUTURE` | 400 |
 | `CLINIC_NOT_FOUND`, `PATIENT_NOT_FOUND`, `APPOINTMENT_NOT_FOUND` | 404 |
 | `APPOINTMENT_CANCELLED` | 409 |
 
 | Endpoint | Use case | Success |
 |---|---|---|
-| `GET /health` | — (`SELECT 1` and migrations applied) | 200 |
+| `GET /health` | — (a query succeeds) | 200 |
 | `POST /clinics` | `createClinic` | 201 |
 | `POST /patients` | `createPatient` | 201 |
 | `POST /appointments` | `createAppointment` | 201 |
@@ -480,7 +567,7 @@ A route does three things: validate the body with Zod, call the use case, map th
 
 | Level | Where | What |
 |---|---|---|
-| Unit | `src/domain/*.test.ts` | Domain functions, table-driven, no mocks |
+| Unit | `src/app/*.test.ts` | Use cases that only compute, table-driven, no mocks |
 | API | `tests/api/*.test.ts` | End to end over HTTP against the full compose stack: only public endpoints, `PUT /test/clock` and the provider's `/admin/*` |
 | Provider client | `tests/api/provider-client.test.ts` | `sendMessage` directly against the provider container, driven by `/admin/rules` |
 
@@ -508,14 +595,14 @@ In wave 3, T6 does not depend on T5's code but its tests need a sent reminder: T
 - `Dockerfile`, `api` and `db` services, `schema.prisma` and the single migration of section 4, migrations at startup, `GET /health`.
 - GitHub CI on every push to `main`: `npm run check` and `npm run test:api`.
 - `infra/config.ts`, `infra/clock.ts`, `infra/db.ts`, `PUT /test/clock`.
-- `domain/result.ts`, `domain/types.ts`, and `app/ports.ts` exactly as in section 7.
+- `shared/result.ts`, every file of `domain/` exactly as in section 5, and `app/ports.ts` exactly as in section 6.
 - `infra/repositories/index.ts` with `makeRepositories`, `repositories` and `transaction`; one file per repository whose methods throw `not implemented`.
-- Express app with JSON parsing, body validation helper, error format, 404, error mapping of section 9.
+- Express app with JSON parsing, `infra/http/schemas.ts` (all schemas of section 9, including id parsing), error format, 404, error mapping of section 9.
 - Every route of `openapi.yaml` registered in its resource file, answering 501.
 - `infra/wiring/` with one empty file per feature.
 - `tests/helpers/`: HTTP client, set clock, provider reset, create clinic, patient and appointment. Smoke test for `/health` and `/test/clock`.
 
-**Out of scope.** Any business rule: domain functions, use cases, repository bodies, provider client.
+**Out of scope.** Any logic: use cases, repository bodies, provider client.
 
 **Acceptance.**
 1. `docker compose up --build` from scratch leaves `GET /health` at 200.
@@ -526,8 +613,8 @@ In wave 3, T6 does not depend on T5's code but its tests need a sent reminder: T
 
 ### T1. Clinics and patients
 
-**Scope.** `POST /clinics`, `POST /patients`; `createClinic`, `createPatient`; clinic and patient repositories; `isValidTimezone`.
-**Owns.** `app/clinics.ts`, `app/patients.ts`, `domain/timezone.ts`, `infra/repositories/{clinics,patients}.ts`, `infra/wiring/{clinics,patients}.ts`, `infra/http/routes/{clinics,patients}.ts`.
+**Scope.** `POST /clinics`, `POST /patients`; `createClinic`, `createPatient`; clinic and patient repositories.
+**Owns.** `app/create-clinic.ts`, `app/create-patient.ts`, `infra/repositories/{clinics,patients}.ts`, `infra/wiring/{clinics,patients}.ts`, `infra/http/routes/{clinics,patients}.ts`.
 
 **Acceptance.**
 1. A clinic with a name and a valid IANA zone → 201 with its `id`. A zone that does not exist → 400.
@@ -539,8 +626,8 @@ In wave 3, T6 does not depend on T5's code but its tests need a sent reminder: T
 
 ### T2. Reminder rules
 
-**Scope.** The five pure functions of section 6: `planReminder`, `decideSend`, `reminderText`, `afterAttempt`, `parseReply`.
-**Owns.** `domain/{schedule,message,retry,reply}.ts`. Nothing reachable through the API, so the reviewer does not run `/verify`.
+**Scope.** The five use cases that only compute, section 7: `planReminder`, `decideSend`, `reminderText`, `afterAttempt`, `parseReply`.
+**Owns.** `app/{plan-reminder,decide-send,reminder-text,after-attempt,parse-reply}.ts`. Nothing reachable through the API, so the reviewer does not run `/verify`.
 
 **Acceptance.**
 1. `planReminder`: same local time on the previous day in the clinic zone; the statement's March and October DST cases and the Canary case give the expected instant.
