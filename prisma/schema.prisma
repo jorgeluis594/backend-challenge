@@ -1,0 +1,94 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AppointmentStatus {
+  scheduled
+  confirmed
+  cancelled
+}
+
+enum ReminderStatus {
+  pending
+  sent
+  failed
+  skipped
+  cancelled
+}
+
+enum SkipReason {
+  too_late
+  no_phone
+  opted_out
+}
+
+model Clinic {
+  id           String        @id @default(uuid()) @db.Uuid
+  name         String
+  timezone     String
+  patients     Patient[]
+  appointments Appointment[]
+
+  @@map("clinics")
+}
+
+model Patient {
+  id               String        @id @default(uuid()) @db.Uuid
+  clinicId         String        @map("clinic_id") @db.Uuid
+  name             String
+  phone            String?
+  acceptsReminders Boolean       @map("accepts_reminders")
+  clinic           Clinic        @relation(fields: [clinicId], references: [id])
+  appointments     Appointment[]
+
+  @@index([phone])
+  @@map("patients")
+}
+
+model Appointment {
+  id        String            @id @default(uuid()) @db.Uuid
+  clinicId  String            @map("clinic_id") @db.Uuid
+  patientId String            @map("patient_id") @db.Uuid
+  startsAt  DateTime          @map("starts_at") @db.Timestamptz(3)
+  status    AppointmentStatus @default(scheduled)
+  clinic    Clinic            @relation(fields: [clinicId], references: [id])
+  patient   Patient           @relation(fields: [patientId], references: [id])
+  reminders Reminder[]
+
+  @@index([patientId])
+  @@map("appointments")
+}
+
+model Reminder {
+  id            String         @id @default(uuid()) @db.Uuid
+  /// creation order
+  seq           Int            @unique @default(autoincrement())
+  appointmentId String         @map("appointment_id") @db.Uuid
+  /// fixed: when it was due
+  scheduledFor  DateTime       @map("scheduled_for") @db.Timestamptz(3)
+  /// internal: moves on each retry
+  nextAttemptAt DateTime       @map("next_attempt_at") @db.Timestamptz(3)
+  status        ReminderStatus
+  /// calls made to the provider
+  attempts      Int            @default(0)
+  sentAt        DateTime?      @map("sent_at") @db.Timestamptz(3)
+  skipReason    SkipReason?    @map("skip_reason")
+  appointment   Appointment    @relation(fields: [appointmentId], references: [id])
+
+  @@index([appointmentId, seq])
+  @@map("reminders")
+}
+
+model InboundMessage {
+  messageId  String   @id @map("message_id")
+  fromPhone  String   @map("from_phone")
+  text       String
+  receivedAt DateTime @map("received_at") @db.Timestamptz(3)
+
+  @@map("inbound_messages")
+}
