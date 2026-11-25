@@ -150,7 +150,9 @@ Las respuestas del paciente llegarían con otro formato y firmadas: una ruta nue
 
 ## 5. Uso de IA
 
-Usé Claude Code como pareja para el diseño, y Orca para lanzar por cada tarea un agente implementador y un revisor independiente, cada tarea en su propio worktree. Los tests los escribe otro agente que nunca lee la implementación: parte de la firma y de las reglas del enunciado.
+Usé IA para la implementación y para ayudar a redactar las definiciones que yo tomé y diseñé: la arquitectura, los casos de uso y los contratos (las firmas de las funciones).
+
+Las herramientas: Claude Code para redactar ese diseño conmigo, y Orca para lanzar por cada tarea un agente implementador y un revisor independiente, cada tarea en su propio worktree. Los tests los escribe otro agente que nunca lee la implementación: parte de la firma y de las reglas del enunciado.
 
 Lo que corregí yo:
 
