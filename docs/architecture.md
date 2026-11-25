@@ -77,7 +77,7 @@ Dependency direction:
 ## 3. Conventions
 
 1. **Absolute imports only**: `@/domain/...`, `@/app/...`, `@/infra/...`, `@/shared/...`. Never `./` or `../`.
-2. **One named-object argument** for every use case and repository method: `getAppointment({ id })`. Exceptions: `parseReply(text)`, `setClock(date)`, `transaction(work, options)` and the functions that take nothing (`now()`, `runReminderPass()`).
+2. **One named-object argument** for every use case and repository method: `getAppointment({ id })`. Exceptions: `parseReply(text)`, `setClock(date)`, `transaction(work)` and the functions that take nothing (`now()`, `runReminderPass()`).
 3. **Two kinds of use case, same folder.**
    - One that needs the database, the provider or the clock is a closure: `makeX(deps)` returns `x(input)`. `deps` lists exactly what it uses.
    - One that only computes is a plain exported function with no `deps`. It never reads the clock: the instant comes as an argument named by intent (`notBefore`, `at`, `attemptedAt`).
@@ -314,10 +314,10 @@ export type ReminderRepository = Readonly<{
   create(input: { appointmentId: AppointmentId; plan: ReminderPlan }): Promise<void>;
   /** pending → cancelled for that appointment. No-op when there is none. */
   cancelPending(input: { appointmentId: AppointmentId }): Promise<void>;
-  /** One pending reminder with next_attempt_at <= at (ORDER BY next_attempt_at, seq LIMIT 1),
-      joined with its appointment, patient and clinic. FOR UPDATE OF the reminder only, SKIP LOCKED.
-      Only inside a transaction. */
-  lockNextDue(input: { at: Date }): Promise<DueReminder | null>;
+  /** Every pending reminder with next_attempt_at <= at (ORDER BY next_attempt_at, seq),
+      each with its appointment, patient and clinic. */
+  findDue(input: { at: Date }): Promise<readonly DueReminder[]>;
+  /** Writes only if the reminder is still pending (WHERE status = 'pending'). */
   settle(input: { id: ReminderId; settlement: ReminderSettlement }): Promise<void>;
 }>;
 
@@ -335,7 +335,7 @@ export type Repositories = Readonly<{
 }>;
 
 /** Runs `work` in one database transaction, with repositories bound to it. */
-export type Transaction = <T>(work: (repos: Repositories) => Promise<T>, options?: { timeoutMs?: number }) => Promise<T>;
+export type Transaction = <T>(work: (repos: Repositories) => Promise<T>) => Promise<T>;
 
 export type ProviderClient = Readonly<{
   sendMessage(input: { to: Phone; text: string; idempotencyKey: ReminderId }): Promise<SendOutcome>;
@@ -346,10 +346,7 @@ Repository rules:
 
 - A `pending` plan is stored with `next_attempt_at = scheduled_for`; a `skipped` plan is stored with its reason.
 - Every `Appointment` returned carries its reminders ordered by `seq`.
-- The only raw query (`$queryRaw`) is `lockNextDue`; it is the only lock in the system:
-  - name the locked table: `FOR UPDATE OF r SKIP LOCKED`. A bare `FOR UPDATE` on a join locks every joined table and would make other passes skip unrelated reminders;
-  - cast uuid parameters (`${id}::uuid`) and write enum values as SQL literals (`status = 'pending'`), not as parameters;
-  - use the snake_case column names of section 4 and map the raw row in the repository.
+- There is no raw SQL and no row lock anywhere: every query goes through the Prisma client.
 - `insertIfNew` needs no raw SQL: `createMany({ data: [row], skipDuplicates: true })` and `count === 1`.
 
 ## 7. Use cases that only compute
@@ -459,25 +456,27 @@ Every repository call in these steps uses the repositories of the transaction.
 ```
 In one transaction: `appointments.findById`; missing → error; already cancelled → return it unchanged; otherwise `reminders.cancelPending`, `appointments.update({ id, status: 'cancelled' })`, return the fresh appointment.
 
-### `runReminderPass` — deps `{ transaction, provider }`
+### `runReminderPass` — deps `{ reminders, provider }`
 
 ```ts
 () => Promise<{ processed: number }>
 ```
-Calls an internal `processNextReminder(): Promise<boolean>` until it returns `false`, counting the `true`s. Each call is one transaction with `timeoutMs: 15_000` (the Prisma default of 5 s equals the provider timeout and would abort mid-call). `transaction` also passes `maxWait: 10_000`, and `DATABASE_URL` sets `connection_limit=20`, because each pass holds a connection during the provider call:
+No transaction and no lock. `reminders.findDue({ at: now() })`, then for each one, in order:
 
-1. `reminders.lockNextDue({ at: now() })`. None → `false`.
-2. `decideSend({ startsAt, phone, acceptsReminders, at: now() })`. `skip` → `settle` as `skipped` with the reason, without calling the provider → `true`.
-3. `provider.sendMessage({ to: decision.to, text: reminderText(...), idempotencyKey: reminder.id })`.
-4. `afterAttempt({ outcome, attempt: reminder.attempts + 1, attemptedAt: now() })` → `settle` → `true`.
+1. `decideSend({ startsAt, phone, acceptsReminders, at: now() })`. `skip` → `settle` as `skipped` with the reason, without calling the provider.
+2. `provider.sendMessage({ to: decision.to, text: reminderText(...), idempotencyKey: reminder.id })`.
+3. `afterAttempt({ outcome, attempt: reminder.attempts + 1, attemptedAt: now() })` → `settle`.
 
-Why this is safe:
+`processed` is the number of reminders in the list.
 
-- The row lock is held during the provider call, so two concurrent passes never send the same reminder; `SKIP LOCKED` makes the second pass move on instead of waiting.
-- A reminder that fails stays `pending` with a later `next_attempt_at`, so the same pass does not pick it again. A retry is never a wait inside the pass.
+What holds and what does not:
+
+- **One message per reminder, always.** Two concurrent passes may both call the provider for the same reminder, but with the same `Idempotency-Key`; the provider delivers once and both passes settle it as `sent`.
+- A reminder that fails stays `pending` with a later `next_attempt_at`; a later pass picks it up. A retry is never a wait inside the pass.
 - `decideSend` runs before every attempt, so retries are also dropped as `too_late`.
-- If the process dies after the provider accepted, the reminder is still `pending`; the next pass resends with the same `Idempotency-Key` and the provider deduplicates.
-- Appointments are never locked. Reschedule, cancel and the webhook use a transaction only so their writes land together; the unique index on pending reminders is the guard against two live reminders for one appointment.
+- If the process dies after the provider accepted, the reminder is still `pending`; the next pass resends with the same key and the provider deduplicates.
+- **Accepted trade-off:** with simultaneous passes, `processed` and `attempts` can count the same reminder twice. Avoiding it needs a row lock held during the provider call; it was left out to keep the code simple. `settle` only writes when the reminder is still `pending`, so a slower pass never overwrites a final state.
+- Reschedule, cancel and the webhook use a transaction only so their writes land together; the unique index on pending reminders is the guard against two live reminders for one appointment.
 
 ### `handleInboundMessage` — deps `{ transaction }`
 
@@ -530,7 +529,7 @@ export const createAppointment = makeCreateAppointment({
 export const rescheduleAppointment = makeRescheduleAppointment({ transaction, quietHours: config.quietHours });
 ```
 
-`infra/repositories/index.ts` exports `makeRepositories(db)` (accepts the client or a transaction client), `repositories = makeRepositories(prisma)` and `transaction`, which wraps `prisma.$transaction(tx => work(makeRepositories(tx)), { timeout })`. `lockNextDue` uses `$queryRaw` on the transaction client.
+`infra/repositories/index.ts` exports `makeRepositories(db)` (accepts the client or a transaction client), `repositories = makeRepositories(prisma)` and `transaction`, which wraps `prisma.$transaction(tx => work(makeRepositories(tx)))`.
 
 ## 9. HTTP
 
@@ -672,7 +671,7 @@ In wave 3, T6 does not depend on T5's code but its tests need a sent reminder: T
 ### T4. Appointments
 
 **Scope.** `POST /appointments`, `GET /appointments/:id`, `PATCH /appointments/:id`, `POST /appointments/:id/cancel`; the four use cases; appointment repository (`create`, `findById`, `update`) and reminder repository (`create`, `cancelPending`).
-**Out of scope.** Sending; the webhook; `lockNextDue`, `settle`, `findLastRemindedByPhone`.
+**Out of scope.** Sending; the webhook; `findDue`, `settle`, `findLastRemindedByPhone`.
 **Owns.** `app/{create,get,reschedule,cancel}-appointment.ts`, `infra/repositories/{appointments,reminders}.ts`, `infra/wiring/appointments.ts`, `infra/http/routes/appointments.ts`.
 
 **Acceptance.**
@@ -691,7 +690,7 @@ In wave 3, T6 does not depend on T5's code but its tests need a sent reminder: T
 
 ### T5. Send pass
 
-**Scope.** `POST /jobs/reminders/run`, `runReminderPass`, `lockNextDue`, `settle`.
+**Scope.** `POST /jobs/reminders/run`, `runReminderPass`, `findDue`, `settle`.
 **Owns.** `app/run-reminder-pass.ts`, `infra/wiring/reminders.ts`, `infra/http/routes/jobs.ts`; in `infra/repositories/reminders.ts` only the two methods above.
 
 **Acceptance.**
@@ -702,7 +701,7 @@ In wave 3, T6 does not depend on T5's code but its tests need a sent reminder: T
 5. Provider unavailable → retry at +1 min and +5 min; third failure → `failed`. Retries do not wait for quiet hours.
 6. Lost response or more than 5 s → retry with the same `Idempotency-Key`; the patient gets one message.
 7. Provider rejection (422) → `failed` with no retry.
-8. Several concurrent passes make one provider call per reminder (checked with `/admin/requests`).
+8. Several concurrent passes deliver one message per reminder (checked with `/admin/messages`).
 9. A cancelled or rescheduled appointment does not send its previous reminder.
 
 **Tests.** API, with the provider's `/admin/rules`. **Depends on** T3, T4.
