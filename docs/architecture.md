@@ -77,7 +77,7 @@ Dependency direction:
 ## 3. Conventions
 
 1. **Absolute imports only**: `@/domain/...`, `@/app/...`, `@/infra/...`, `@/shared/...`. Never `./` or `../`.
-2. **One named-object argument** for every use case and repository method: `getAppointment({ id })`. Exceptions: `parseReply(text)`, `setClock(date)`, `transaction(work)` and the functions that take nothing (`now()`, `runReminderPass()`).
+2. **One named-object argument** for every use case and repository method: `getAppointment({ id })`. Exceptions: `parseReply(text)`, `setClock(date)`, `transaction(work)`, `appointments.withLock({ id }, work)` and the functions that take nothing (`now()`, `runReminderPass()`).
 3. **Two kinds of use case, same folder.**
    - One that needs the database, the provider or the clock is a closure: `makeX(deps)` returns `x(input)`. `deps` lists exactly what it uses.
    - One that only computes is a plain exported function with no `deps`. It never reads the clock: the instant comes as an argument named by intent (`notBefore`, `at`, `attemptedAt`).
@@ -294,6 +294,10 @@ export type AppointmentRepository = Readonly<{
   /** Inserts the appointment and its first reminder atomically. */
   create(input: { clinicId: ClinicId; patientId: PatientId; startsAt: Date; reminder: ReminderPlan }): Promise<Appointment>;
   findById(input: { id: AppointmentId }): Promise<Appointment | null>;
+  /** Runs `work` in a transaction that holds a row lock on the appointment until it ends, so two
+      operations on the same appointment run one after the other. `work` receives the appointment
+      as it is once the lock is held, or null when it does not exist. */
+  withLock<T>(input: { id: AppointmentId }, work: (appointment: Appointment | null) => Promise<T>): Promise<T>;
   update(input: { id: AppointmentId; startsAt?: Date; status?: AppointmentStatus }): Promise<void>;
   /** The appointment that received the most recently SENT reminder to that phone
       (reminders with status 'sent', ORDER BY sent_at DESC, seq DESC, LIMIT 1), among appointments
@@ -341,7 +345,7 @@ Repository rules:
 
 - A `pending` plan is stored with `next_attempt_at = scheduled_for`; a `skipped` plan is stored with its reason.
 - Every `Appointment` returned carries its reminders ordered by `seq`.
-- There is no raw SQL and no row lock anywhere: every query goes through the Prisma client.
+- One row lock and one line of raw SQL in the whole service: `withLock` runs `SELECT id FROM appointments WHERE id = $1 FOR UPDATE`, because Prisma has no API for `FOR UPDATE`. Every other query goes through the Prisma client.
 - `insertIfNew` needs no raw SQL: `createMany({ data: [row], skipDuplicates: true })` and `count === 1`.
 
 ## 7. Use cases that only compute
@@ -440,25 +444,25 @@ Cannot fail: an invalid timezone never becomes a `Timezone`.
 (input: { id: AppointmentId }) => Promise<Result<Appointment, 'APPOINTMENT_NOT_FOUND'>>
 ```
 
-### `rescheduleAppointment` — deps `{ transaction, appointments, reminders, clinics, quietHours }`
+### `rescheduleAppointment` — deps `{ appointments, reminders, clinics, quietHours }`
 
 ```ts
 (input: { id: AppointmentId; startsAt: Date }) =>
   Promise<Result<Appointment, 'APPOINTMENT_NOT_FOUND' | 'APPOINTMENT_CANCELLED' | 'APPOINTMENT_STARTED' | 'STARTS_AT_NOT_FUTURE'>>
 ```
-In one transaction, with `const at = now()`, checked in this order:
-1. `appointments.findById`. Missing → `APPOINTMENT_NOT_FOUND`.
+Inside `appointments.withLock({ id }, work)`, with `const at = now()`, checked in this order:
+1. The appointment `work` receives is null → `APPOINTMENT_NOT_FOUND`.
 2. Status `cancelled` → `APPOINTMENT_CANCELLED`. Current `startsAt <= at` → `APPOINTMENT_STARTED`. New `startsAt <= at` → `STARTS_AT_NOT_FUTURE`.
 3. Same instant as the current `startsAt` (compare `getTime()`) → return the appointment unchanged (rule 1: no second reminder for the same time).
 4. `reminders.cancelPending`; `appointments.update({ id, startsAt, status: 'scheduled' })`; `clinics.findById` for the timezone; `planReminder`; `reminders.create`. The new reminder is created even when the previous one was already sent.
 5. Return `appointments.findById`.
 
-### `cancelAppointment` — deps `{ transaction, appointments, reminders }`
+### `cancelAppointment` — deps `{ appointments, reminders }`
 
 ```ts
 (input: { id: AppointmentId }) => Promise<Result<Appointment, 'APPOINTMENT_NOT_FOUND'>>
 ```
-In one transaction: `appointments.findById`; missing → error; already cancelled → return it unchanged; otherwise `reminders.cancelPending`, `appointments.update({ id, status: 'cancelled' })`, return the fresh appointment.
+Inside `appointments.withLock({ id }, work)`: appointment null → error; already cancelled → return it unchanged; otherwise `reminders.cancelPending`, `appointments.update({ id, status: 'cancelled' })`, return the fresh appointment.
 
 ### `runReminderPass` — deps `{ reminders, provider }`
 
@@ -482,7 +486,7 @@ What holds and what does not:
 - `decideSend` runs before every attempt, so retries are also dropped as `too_late`.
 - If the process dies after the provider accepted, the reminder is still `pending` with the attempt counted; a pass after the claim minute resends with the same key and the provider deduplicates.
 - `settle` only writes when the reminder is still `pending`, so it never overwrites a final state.
-- Reschedule, cancel and the webhook use a transaction only so their writes land together; the unique index on pending reminders is the guard against two live reminders for one appointment.
+- Reschedule, cancel and the webhook change an appointment inside `appointments.withLock`: the row lock makes two operations on the same appointment run one after the other, and each decides on the state it reads once it holds the lock. The send pass does not take that lock; it never writes the appointment. The unique index on pending reminders stays as a last guard.
 
 ### `handleInboundMessage` — deps `{ transaction, inboundMessages, appointments, reminders }`
 
@@ -493,7 +497,7 @@ In one transaction:
 1. `inboundMessages.insertIfNew` (`ON CONFLICT DO NOTHING`). `false` → `duplicate`.
 2. `parseReply(text)`. `null` → `ignored`.
 3. `appointments.findLastRemindedByPhone({ phone: from, at: now() })`. None → `ignored`.
-4. `confirm` → `update({ id, status: 'confirmed' })`. `cancel` → `reminders.cancelPending` and `update({ id, status: 'cancelled' })`. → `applied`.
+4. `appointments.withLock({ id: target.id }, work)`, which joins the open transaction. Appointment null or `cancelled` once the lock is held → `ignored`. `confirm` → `update({ id, status: 'confirmed' })`. `cancel` → `reminders.cancelPending` and `update({ id, status: 'cancelled' })`. → `applied`.
 
 The message is stored in the same transaction that applies it: if applying fails, the provider's retry is processed again. The lookup is by phone, not by patient, because the same number can belong to several patients. A cancelled appointment is excluded from the lookup, so a SI after a NO is ignored.
 
@@ -556,11 +560,15 @@ const activeTransaction = new AsyncLocalStorage<Prisma.TransactionClient>();
 /** The client of the transaction this call runs in, or the plain client outside one. */
 export const db = () => activeTransaction.getStore() ?? prisma;
 
-export const transaction: Transaction = (work) =>
-  prisma.$transaction((tx) => activeTransaction.run(tx, work));
+export const transaction: Transaction = (work) => {
+  if (activeTransaction.getStore()) return work();
+  return prisma.$transaction((tx) => activeTransaction.run(tx, work));
+};
 ```
 
-`transaction(work)` opens a Prisma transaction and keeps its client in an `AsyncLocalStorage` while `work` runs, so the repositories called inside it use that client without receiving it. A use case that needs its writes to land together takes `transaction` in its `deps`, next to the repositories it uses.
+`transaction(work)` opens a Prisma transaction and keeps its client in an `AsyncLocalStorage` while `work` runs, so the repositories called inside it use that client without receiving it. A `transaction` called inside another joins it. A use case that needs its writes to land together takes `transaction` in its `deps`, next to the repositories it uses.
+
+`appointmentRepository.withLock` is built on it: `transaction(async () => { lock the row with FOR UPDATE; return work(await findById({ id })); })`.
 
 ## 9. HTTP
 
