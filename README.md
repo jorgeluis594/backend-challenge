@@ -73,8 +73,9 @@ Las reglas de negocio no saben de Express ni de Prisma: dependen de los contrato
 ### Cómo se evitan los envíos duplicados
 
 - **El id del recordatorio es la `Idempotency-Key`** del proveedor, la misma en todos los intentos. Si se pierde la respuesta (504, error de red o más de 5 s), el reintento lleva la misma clave y el paciente recibe un solo mensaje.
-- **Una llamada al proveedor por intento**, aunque corran varias pasadas a la vez. Antes de llamar, la pasada reserva el intento con un único `UPDATE` condicional: solo si el recordatorio sigue `pending` y con el número de intentos que leyó. De las pasadas que leyeron el mismo recordatorio, solo una actualiza la fila y envía. La reserva además mueve el siguiente intento un minuto adelante, así que una pasada que empiece durante la llamada no lo ve pendiente. Sin bloqueos de fila ni SQL a mano.
+- **Una llamada al proveedor por intento**, aunque corran varias pasadas a la vez. Antes de llamar, la pasada reserva el intento con un único `UPDATE` condicional: solo si el recordatorio sigue `pending` y con el número de intentos que leyó. De las pasadas que leyeron el mismo recordatorio, solo una actualiza la fila y envía. La reserva además mueve el siguiente intento un minuto adelante, así que una pasada que empiece durante la llamada no lo ve pendiente. La pasada no toma bloqueos de fila ni usa SQL a mano.
 - **Un recordatorio pendiente por cita**, garantizado por un índice único parcial (`WHERE status = 'pending'`).
+- **Operaciones simultáneas sobre una misma cita**: reprogramar, cancelar y el webhook toman un bloqueo de fila sobre la cita (`SELECT … FOR UPDATE`, la única línea de SQL a mano, porque Prisma no lo ofrece). Se ejecutan una tras otra y cada una decide sobre el estado que dejó la anterior: una reprogramación ya no revive una cita cancelada ni dos reprogramaciones simultáneas responden 500.
 - **Webhooks repetidos**: los mensajes entrantes se guardan por `messageId`, en la misma transacción que los aplica; un aviso repetido se aplica una vez.
 
 ### Zonas horarias
@@ -102,9 +103,8 @@ Los instantes son UTC en todas partes: `Date` en el código y `timestamptz` en l
 
 ## 3. Qué quedó fuera y qué haría con más tiempo
 
-Límites conocidos. El enunciado pide la garantía de concurrencia para la pasada de envío; para el resto acepté ventanas estrechas antes que añadir bloqueos que el diseño no necesita en ningún otro sitio:
+Límites conocidos:
 
-- **Carreras entre operaciones de una misma cita.** Reprogramar, cancelar y el webhook usan una transacción para que sus escrituras lleguen juntas, pero no bloquean nada. Una reprogramación que compite con una cancelación de la misma cita puede dejarla incoherente, y dos reprogramaciones simultáneas pueden hacer que una responda 500 por el índice único.
 - **Recordatorio en el instante de inicio.** Si una pasada llega a un recordatorio justo cuando la cita empieza mientras otra pasada lo está entregando, puede quedar `skipped` aunque el mensaje salió.
 - **El proceso muere tras reservar un intento.** Ese intento cuenta; el recordatorio se reintenta un minuto después con la misma clave y el proveedor no lo duplica.
 - **Timeout y error de red sin test automático.** Están implementados (5 s), pero el simulador no puede producirlos de forma determinista. El camino "puede que se haya entregado" se prueba con su 504.
@@ -113,7 +113,6 @@ Límites conocidos. El enunciado pide la garantía de concurrencia para la pasad
 
 Con más tiempo:
 
-- Cerrar las carreras de arriba con un bloqueo de fila sobre la cita.
 - Tests del timeout y del error de red contra un servidor falso.
 - Logs estructurados y métricas.
 - Un índice para la búsqueda de recordatorios enviados por teléfono, ordenados por `sent_at` (hoy solo hay índice sobre el teléfono del paciente).
