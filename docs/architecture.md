@@ -464,7 +464,7 @@ Inside `appointments.withLock({ id }, work)`, with `const at = now()`, checked i
 ```
 Inside `appointments.withLock({ id }, work)`: appointment null → error; already cancelled → return it unchanged; otherwise `reminders.cancelPending`, `appointments.update({ id, status: 'cancelled' })`, return the fresh appointment.
 
-### `runReminderPass` — deps `{ reminders, provider }`
+### `runReminderPass` — deps `{ reminders, provider, quietHours }`
 
 ```ts
 () => Promise<{ processed: number }>
@@ -472,9 +472,10 @@ Inside `appointments.withLock({ id }, work)`: appointment null → error; alread
 No transaction and no lock. `reminders.findDue({ at: now() })`, then for each one, in order:
 
 1. `decideSend({ startsAt, phone, acceptsReminders, at: now() })`. `skip` → `settle` as `skipped` with the reason, without calling the provider.
-2. `reminders.claim({ id, attempts: reminder.attempts, until: now() + 1 minute })`. `false` → another pass has this attempt; go to the next reminder.
-3. `provider.sendMessage({ to: decision.to, text: reminderText(...), idempotencyKey: reminder.id })`.
-4. `afterAttempt({ outcome, attempt: reminder.attempts + 1, attemptedAt: now() })` → `settle`.
+2. Only for a first attempt (`reminder.attempts === 0`), quiet hours are checked again at sending time, because a pass can run late: `planReminder({ startsAt, timezone, notBefore: now(), quietHours })`, the same function that planned the reminder. Plan `skipped` → `settle` as `skipped` with `too_late`. Plan `scheduledFor` later than `now()` (the pass is running inside quiet hours) → `settle` as `pending` with `attempts: 0` and `nextAttemptAt: plan.scheduledFor`, without calling the provider; the reminder waits for the end of quiet hours and does not count as processed. `scheduled_for` does not change. Retries skip this step: they do not wait for quiet hours.
+3. `reminders.claim({ id, attempts: reminder.attempts, until: now() + 1 minute })`. `false` → another pass has this attempt; go to the next reminder.
+4. `provider.sendMessage({ to: decision.to, text: reminderText(...), idempotencyKey: reminder.id })`.
+5. `afterAttempt({ outcome, attempt: reminder.attempts + 1, attemptedAt: now() })` → `settle`.
 
 `processed` is the number of reminders this pass settled.
 
@@ -738,6 +739,7 @@ In wave 3, T6 does not depend on T5's code but its tests need a sent reminder: T
 3. No phone or not accepting reminders → `skipped` with `no_phone` or `opted_out`, without calling the provider.
 4. Appointment already started when sending or retrying → `skipped` with `too_late`.
 5. Provider unavailable → retry at +1 min and +5 min; third failure → `failed`. Retries do not wait for quiet hours.
+10. A first attempt whose pass runs inside quiet hours is not sent: it waits for the end of quiet hours and is sent by a pass from then on, or becomes `skipped` with `too_late` when that is not before the appointment.
 6. Lost response or more than 5 s → retry with the same `Idempotency-Key`; the patient gets one message.
 7. Provider rejection (422) → `failed` with no retry.
 8. Several concurrent passes deliver one message per reminder and call the provider once per attempt (checked with the provider's `/admin` endpoints).
