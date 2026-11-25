@@ -110,7 +110,7 @@ Los instantes son UTC en todas partes: `Date` en el código y `timestamptz` en l
 
 ### Qué descarté
 
-- **Bloqueos de fila (`SELECT … FOR UPDATE SKIP LOCKED`) en la pasada**: la reserva condicional da la garantía que pide el enunciado con menos código.
+- **Bloqueos de fila (`SELECT … FOR UPDATE SKIP LOCKED`) en la pasada de envío**: ahí la reserva condicional da la garantía que pide el enunciado con menos código. El bloqueo de fila sí se usa al reprogramar, cancelar y aplicar una respuesta, para que dos operaciones sobre la misma cita no se pisen.
 - **Una cola o un proceso worker**: el enunciado lanza la pasada por HTTP.
 - **Un paso de build**: TypeScript corre con `tsx`; `tsc` solo comprueba tipos.
 
