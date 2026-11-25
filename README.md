@@ -62,6 +62,8 @@ Tres carpetas, una pregunta cada una:
 | `src/app/` | Toda la lógica, un caso de uso por archivo. Los que usan base de datos, proveedor o reloj son closures `makeX(deps)` con sus dependencias inyectadas (`createAppointment`, `runReminderPass`, …). Los que solo calculan son funciones puras sin dependencias (`planReminder`, `decideSend`, `reminderText`, `afterAttempt`, `parseReply`) y tienen tests unitarios por tablas. |
 | `src/infra/` | Lo que toca el exterior: base de datos (Prisma y repositorios), cliente del proveedor, HTTP (Express y Zod), configuración, reloj y el cableado que inyecta las dependencias reales. |
 
+Elegí programación funcional: funciones y tipos de datos, sin clases. Así el flujo de datos se ve mejor, porque el estado es explícito y se pasa de una función a otra, en vez de quedar encapsulado en una caja oscura como en la programación orientada a objetos. Para esta prueba tiene sentido porque el código se lee mejor: lo que entra y lo que sale de cada caso de uso está en su firma.
+
 Las reglas de negocio no saben de Express ni de Prisma: dependen de los contratos de `src/app/ports.ts`. Las rutas solo validan la entrada, llaman al caso de uso y traducen el resultado a HTTP.
 
 ### Tipado
