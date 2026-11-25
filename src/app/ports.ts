@@ -18,6 +18,10 @@ export type AppointmentRepository = Readonly<{
   /** Inserts the appointment and its first reminder atomically. */
   create(input: { clinicId: ClinicId; patientId: PatientId; startsAt: Date; reminder: ReminderPlan }): Promise<Appointment>;
   findById(input: { id: AppointmentId }): Promise<Appointment | null>;
+  /** Runs `work` in a transaction that holds a row lock on the appointment until it ends, so two
+      operations on the same appointment run one after the other. `work` receives the appointment
+      as it is once the lock is held, or null when it does not exist. */
+  withLock<T>(input: { id: AppointmentId }, work: (appointment: Appointment | null) => Promise<T>): Promise<T>;
   update(input: { id: AppointmentId; startsAt?: Date; status?: AppointmentStatus }): Promise<void>;
   /** The appointment that received the most recently SENT reminder to that phone
       (reminders with status 'sent', ORDER BY sent_at DESC, seq DESC, LIMIT 1), among appointments

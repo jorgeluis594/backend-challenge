@@ -4,7 +4,7 @@ import type { Appointment, AppointmentId } from '@/domain/appointment';
 import type { ClinicId } from '@/domain/clinic';
 import type { PatientId } from '@/domain/patient';
 import type { Reminder, ReminderId, SkipReason } from '@/domain/reminder';
-import { db } from '@/infra/db';
+import { db, transaction } from '@/infra/db';
 
 type ReminderRow = Readonly<{
   id: string;
@@ -53,6 +53,12 @@ const toAppointment = (row: AppointmentRow): Appointment => ({
   reminders: row.reminders.map(toReminder),
 });
 
+const findById: AppointmentRepository['findById'] = async ({ id }) => {
+  const row = await db().appointment.findUnique({ where: { id }, include: withReminders });
+  if (!row) return null;
+  return toAppointment(row);
+};
+
 export const appointmentRepository: AppointmentRepository = {
   create: async ({ reminder, ...appointment }) =>
     toAppointment(
@@ -61,11 +67,13 @@ export const appointmentRepository: AppointmentRepository = {
         include: withReminders,
       }),
     ),
-  findById: async ({ id }) => {
-    const row = await db().appointment.findUnique({ where: { id }, include: withReminders });
-    if (!row) return null;
-    return toAppointment(row);
-  },
+  findById,
+  // The only raw SQL in the service: Prisma has no API for FOR UPDATE.
+  withLock: ({ id }, work) =>
+    transaction(async () => {
+      await db().$queryRaw`SELECT id FROM appointments WHERE id = ${id}::uuid FOR UPDATE`;
+      return work(await findById({ id }));
+    }),
   update: async ({ id, ...changes }) => {
     await db().appointment.update({ where: { id }, data: changes });
   },

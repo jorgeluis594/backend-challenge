@@ -20,13 +20,16 @@ export const makeHandleInboundMessage =
       if (!(await inboundMessages.insertIfNew(input))) return 'duplicate';
       const reply = parseReply(input.text);
       if (!reply) return 'ignored';
-      const appointment = await appointments.findLastRemindedByPhone({ phone: input.from, at: now() });
-      if (!appointment) return 'ignored';
-      if (reply === 'confirm') {
-        await appointments.update({ id: appointment.id, status: 'confirmed' });
+      const target = await appointments.findLastRemindedByPhone({ phone: input.from, at: now() });
+      if (!target) return 'ignored';
+      return appointments.withLock({ id: target.id }, async (appointment) => {
+        if (!appointment || appointment.status === 'cancelled') return 'ignored';
+        if (reply === 'confirm') {
+          await appointments.update({ id: target.id, status: 'confirmed' });
+          return 'applied';
+        }
+        await reminders.cancelPending({ appointmentId: target.id });
+        await appointments.update({ id: target.id, status: 'cancelled' });
         return 'applied';
-      }
-      await reminders.cancelPending({ appointmentId: appointment.id });
-      await appointments.update({ id: appointment.id, status: 'cancelled' });
-      return 'applied';
+      });
     });

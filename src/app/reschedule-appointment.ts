@@ -1,4 +1,4 @@
-import type { AppointmentRepository, ClinicRepository, ReminderRepository, Transaction } from '@/app/ports';
+import type { AppointmentRepository, ClinicRepository, ReminderRepository } from '@/app/ports';
 import { planReminder } from '@/app/plan-reminder';
 import type { Appointment, AppointmentId } from '@/domain/appointment';
 import type { QuietHours } from '@/domain/reminder';
@@ -12,7 +12,6 @@ export type RescheduleAppointmentError =
   | 'APPOINTMENT_STARTED'
   | 'STARTS_AT_NOT_FUTURE';
 export type RescheduleAppointmentDeps = Readonly<{
-  transaction: Transaction;
   appointments: AppointmentRepository;
   reminders: ReminderRepository;
   clinics: ClinicRepository;
@@ -22,10 +21,9 @@ export type RescheduleAppointmentDeps = Readonly<{
 export const makeRescheduleAppointment =
   (deps: RescheduleAppointmentDeps) =>
   (input: RescheduleAppointmentInput): Promise<Result<Appointment, RescheduleAppointmentError>> =>
-    deps.transaction(async () => {
+    deps.appointments.withLock({ id: input.id }, async (appointment) => {
       const { appointments, reminders, clinics } = deps;
       const at = now();
-      const appointment = await appointments.findById({ id: input.id });
       if (!appointment) return fail('APPOINTMENT_NOT_FOUND');
       if (appointment.status === 'cancelled') return fail('APPOINTMENT_CANCELLED');
       if (appointment.startsAt <= at) return fail('APPOINTMENT_STARTED');
