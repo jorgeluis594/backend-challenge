@@ -24,13 +24,17 @@ services:
       retries: 6
 
   # A failed pass is logged and the loop goes on: reminders stay pending in the database
-  # and the next pass sends them.
+  # and the next pass sends them. Healthy while a pass succeeded in the last 3 minutes.
   cron:
     build: .
     restart: unless-stopped
     environment:
       API_URL: http://api:3000
-    command: sh -c 'while true; do ./scripts/run-reminder-pass.sh; sleep 60; done'
+    command: sh -c 'while true; do ./scripts/run-reminder-pass.sh && touch /tmp/last-pass; sleep 60; done'
+    healthcheck:
+      test: ["CMD-SHELL", "find /tmp/last-pass -mmin -3 | grep -q ."]
+      interval: 30s
+      retries: 1
     depends_on:
       api:
         condition: service_healthy
@@ -38,6 +42,10 @@ services:
   provider:
     build: ./provider
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4010/health"]
+      interval: 10s
+      retries: 6
 
   db:
     image: postgres:16-alpine
