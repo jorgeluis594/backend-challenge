@@ -1,12 +1,12 @@
 import type { Prisma } from '@prisma/client';
 import type { ReminderRepository } from '@/app/ports';
 
-export const makeReminderRepository = (_db: Prisma.TransactionClient): ReminderRepository => ({
-  create: async () => {
-    throw new Error('not implemented');
+export const makeReminderRepository = (db: Prisma.TransactionClient): ReminderRepository => ({
+  create: async ({ appointmentId, plan }) => {
+    await db.reminder.create({ data: { ...plan, appointmentId, nextAttemptAt: plan.scheduledFor } });
   },
-  cancelPending: async () => {
-    throw new Error('not implemented');
+  cancelPending: async ({ appointmentId }) => {
+    await db.reminder.updateMany({ where: { appointmentId, status: 'pending' }, data: { status: 'cancelled' } });
   },
   findDue: async () => {
     throw new Error('not implemented');
