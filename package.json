@@ -1,0 +1,33 @@
+{
+  "name": "clinicsay-reminders",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test:unit": "vitest run src --passWithNoTests",
+    "check": "npm run lint && npm run typecheck && npm run test:unit"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "express": "^5.3.0",
+    "luxon": "^3.7.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/express": "^5.0.6",
+    "@types/luxon": "^3.7.6",
+    "@types/node": "^22.20.5",
+    "eslint": "^10.15.0",
+    "prisma": "^6.19.3",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.74.0",
+    "vitest": "^5.1.1"
+  }
+}
