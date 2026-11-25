@@ -52,8 +52,8 @@ src/
   infra/
     config.ts                   environment, validated with Zod at startup
     clock.ts                    now(), setClock()
-    db.ts                       PrismaClient
-    repositories/               one file per repository + index.ts
+    db.ts                       db(), transaction()
+    repositories/               one file per repository
     provider/client.ts          sendMessage
     wiring/                     injects real dependencies into the use cases, exports them ready
     http/
@@ -329,16 +329,8 @@ export type InboundMessageRepository = Readonly<{
   insertIfNew(input: InboundMessage): Promise<boolean>;
 }>;
 
-export type Repositories = Readonly<{
-  clinics: ClinicRepository;
-  patients: PatientRepository;
-  appointments: AppointmentRepository;
-  reminders: ReminderRepository;
-  inboundMessages: InboundMessageRepository;
-}>;
-
-/** Runs `work` in one database transaction, with repositories bound to it. */
-export type Transaction = <T>(work: (repos: Repositories) => Promise<T>) => Promise<T>;
+/** Runs `work` in one database transaction. Every repository call made inside `work` joins it. */
+export type Transaction = <T>(work: () => Promise<T>) => Promise<T>;
 
 export type ProviderClient = Readonly<{
   sendMessage(input: { to: Phone; text: string; idempotencyKey: ReminderId }): Promise<SendOutcome>;
@@ -448,7 +440,7 @@ Cannot fail: an invalid timezone never becomes a `Timezone`.
 (input: { id: AppointmentId }) => Promise<Result<Appointment, 'APPOINTMENT_NOT_FOUND'>>
 ```
 
-### `rescheduleAppointment` — deps `{ transaction, quietHours }`
+### `rescheduleAppointment` — deps `{ transaction, appointments, reminders, clinics, quietHours }`
 
 ```ts
 (input: { id: AppointmentId; startsAt: Date }) =>
@@ -461,9 +453,7 @@ In one transaction, with `const at = now()`, checked in this order:
 4. `reminders.cancelPending`; `appointments.update({ id, startsAt, status: 'scheduled' })`; `clinics.findById` for the timezone; `planReminder`; `reminders.create`. The new reminder is created even when the previous one was already sent.
 5. Return `appointments.findById`.
 
-Every repository call in these steps uses the repositories of the transaction.
-
-### `cancelAppointment` — deps `{ transaction }`
+### `cancelAppointment` — deps `{ transaction, appointments, reminders }`
 
 ```ts
 (input: { id: AppointmentId }) => Promise<Result<Appointment, 'APPOINTMENT_NOT_FOUND'>>
@@ -494,7 +484,7 @@ What holds and what does not:
 - `settle` only writes when the reminder is still `pending`, so it never overwrites a final state.
 - Reschedule, cancel and the webhook use a transaction only so their writes land together; the unique index on pending reminders is the guard against two live reminders for one appointment.
 
-### `handleInboundMessage` — deps `{ transaction }`
+### `handleInboundMessage` — deps `{ transaction, inboundMessages, appointments, reminders }`
 
 ```ts
 (input: InboundMessage) => Promise<'applied' | 'duplicate' | 'ignored'>
@@ -533,19 +523,44 @@ One file per feature: `clinics`, `patients`, `appointments`, `reminders`, `inbou
 // infra/wiring/appointments.ts
 import { makeCreateAppointment } from '@/app/create-appointment';
 import { makeRescheduleAppointment } from '@/app/reschedule-appointment';
-import { repositories, transaction } from '@/infra/repositories';
 import { config } from '@/infra/config';
+import { transaction } from '@/infra/db';
+import { appointmentRepository } from '@/infra/repositories/appointments';
+import { clinicRepository } from '@/infra/repositories/clinics';
+import { patientRepository } from '@/infra/repositories/patients';
+import { reminderRepository } from '@/infra/repositories/reminders';
 
 export const createAppointment = makeCreateAppointment({
-  clinics: repositories.clinics,
-  patients: repositories.patients,
-  appointments: repositories.appointments,
+  clinics: clinicRepository,
+  patients: patientRepository,
+  appointments: appointmentRepository,
   quietHours: config.quietHours,
 });
-export const rescheduleAppointment = makeRescheduleAppointment({ transaction, quietHours: config.quietHours });
+export const rescheduleAppointment = makeRescheduleAppointment({
+  transaction,
+  appointments: appointmentRepository,
+  reminders: reminderRepository,
+  clinics: clinicRepository,
+  quietHours: config.quietHours,
+});
 ```
 
-`infra/repositories/index.ts` exports `makeRepositories(db)` (accepts the client or a transaction client), `repositories = makeRepositories(prisma)` and `transaction`, which wraps `prisma.$transaction(tx => work(makeRepositories(tx)))`.
+Each repository file exports one object that implements its port (`clinicRepository`, `patientRepository`, `appointmentRepository`, `reminderRepository`, `inboundMessageRepository`). A repository includes its database client: it calls `db()` from `@/infra/db` in every method and receives nothing.
+
+### Database client and transactions (`infra/db.ts`)
+
+```ts
+const prisma = new PrismaClient();
+const activeTransaction = new AsyncLocalStorage<Prisma.TransactionClient>();
+
+/** The client of the transaction this call runs in, or the plain client outside one. */
+export const db = () => activeTransaction.getStore() ?? prisma;
+
+export const transaction: Transaction = (work) =>
+  prisma.$transaction((tx) => activeTransaction.run(tx, work));
+```
+
+`transaction(work)` opens a Prisma transaction and keeps its client in an `AsyncLocalStorage` while `work` runs, so the repositories called inside it use that client without receiving it. A use case that needs its writes to land together takes `transaction` in its `deps`, next to the repositories it uses.
 
 ## 9. HTTP
 
@@ -627,7 +642,7 @@ In wave 3, T6 does not depend on T5's code but its tests need a sent reminder: T
 - GitHub CI on every push to `main`: `npm run check` and `npm run test:api`.
 - `infra/config.ts`, `infra/clock.ts`, `infra/db.ts`, `PUT /test/clock`.
 - `shared/result.ts`, every file of `domain/` exactly as in section 5, and `app/ports.ts` exactly as in section 6.
-- `infra/repositories/index.ts` with `makeRepositories`, `repositories` and `transaction`; one file per repository whose methods throw `not implemented`.
+- `infra/db.ts` with `db` and `transaction`; one file per repository whose methods throw `not implemented`.
 - Express app with JSON parsing, `infra/http/schemas.ts` (all schemas of section 9, including id parsing), error format, 404, error mapping of section 9.
 - Every route of `openapi.yaml` registered in its resource file, answering 501.
 - `infra/wiring/` with one empty file per feature.
