@@ -41,6 +41,9 @@ export type ReminderRepository = Readonly<{
   /** Every pending reminder with next_attempt_at <= at (ORDER BY next_attempt_at, seq),
       each with its appointment, patient and clinic. */
   findDue(input: { at: Date }): Promise<readonly DueReminder[]>;
+  /** Reserves one attempt: only if the reminder is still pending with exactly `attempts`,
+      sets attempts + 1 and next_attempt_at = `until`. false when another pass got it first. */
+  claim(input: { id: ReminderId; attempts: number; until: Date }): Promise<boolean>;
   /** Writes only if the reminder is still pending (WHERE status = 'pending'). */
   settle(input: { id: ReminderId; settlement: ReminderSettlement }): Promise<void>;
 }>;

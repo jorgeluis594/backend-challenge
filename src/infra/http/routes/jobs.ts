@@ -1,7 +1,8 @@
 import { Router } from 'express';
+import { runReminderPass } from '@/infra/wiring/reminders';
 
 export const jobsRouter = Router();
 
-jobsRouter.post('/jobs/reminders/run', (_req, res) => {
-  res.status(501).json({ error: 'Not implemented' });
+jobsRouter.post('/jobs/reminders/run', async (_req, res) => {
+  res.json(await runReminderPass());
 });

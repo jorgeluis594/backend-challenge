@@ -45,17 +45,6 @@ describe('test clock', () => {
   });
 });
 
-describe('routes of the contract not built yet', () => {
-  test.each([
-    ['POST', '/jobs/reminders/run'],
-  ] as const)('%s %s answers 501 with an error message', async (method, path) => {
-    const response = await request(method, path);
-
-    expect(response.status).toBe(501);
-    expect(response.body).toEqual({ error: expect.any(String) });
-  });
-});
-
 describe('unknown route', () => {
   test('answers 404 with an error message', async () => {
     const response = await request('GET', '/no-such-route');
