@@ -1,4 +1,5 @@
 import { makeCreatePatient } from '@/app/create-patient';
-import { repositories } from '@/infra/repositories';
+import { clinicRepository } from '@/infra/repositories/clinics';
+import { patientRepository } from '@/infra/repositories/patients';
 
-export const createPatient = makeCreatePatient({ clinics: repositories.clinics, patients: repositories.patients });
+export const createPatient = makeCreatePatient({ clinics: clinicRepository, patients: patientRepository });

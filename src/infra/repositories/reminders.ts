@@ -1,18 +1,18 @@
-import type { Prisma } from '@prisma/client';
 import type { ReminderRepository } from '@/app/ports';
 import type { Timezone } from '@/domain/clinic';
 import type { Phone } from '@/domain/patient';
 import type { ReminderId } from '@/domain/reminder';
+import { db } from '@/infra/db';
 
-export const makeReminderRepository = (db: Prisma.TransactionClient): ReminderRepository => ({
+export const reminderRepository: ReminderRepository = {
   create: async ({ appointmentId, plan }) => {
-    await db.reminder.create({ data: { ...plan, appointmentId, nextAttemptAt: plan.scheduledFor } });
+    await db().reminder.create({ data: { ...plan, appointmentId, nextAttemptAt: plan.scheduledFor } });
   },
   cancelPending: async ({ appointmentId }) => {
-    await db.reminder.updateMany({ where: { appointmentId, status: 'pending' }, data: { status: 'cancelled' } });
+    await db().reminder.updateMany({ where: { appointmentId, status: 'pending' }, data: { status: 'cancelled' } });
   },
   findDue: async ({ at }) => {
-    const rows = await db.reminder.findMany({
+    const rows = await db().reminder.findMany({
       where: { status: 'pending', nextAttemptAt: { lte: at } },
       orderBy: [{ nextAttemptAt: 'asc' }, { seq: 'asc' }],
       include: { appointment: { include: { patient: true, clinic: true } } },
@@ -26,13 +26,13 @@ export const makeReminderRepository = (db: Prisma.TransactionClient): ReminderRe
     }));
   },
   claim: async ({ id, attempts, until }) => {
-    const { count } = await db.reminder.updateMany({
+    const { count } = await db().reminder.updateMany({
       where: { id, status: 'pending', attempts },
       data: { attempts: { increment: 1 }, nextAttemptAt: until },
     });
     return count === 1;
   },
   settle: async ({ id, settlement }) => {
-    await db.reminder.updateMany({ where: { id, status: 'pending' }, data: settlement });
+    await db().reminder.updateMany({ where: { id, status: 'pending' }, data: settlement });
   },
-});
+};

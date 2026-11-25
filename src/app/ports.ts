@@ -53,16 +53,8 @@ export type InboundMessageRepository = Readonly<{
   insertIfNew(input: InboundMessage): Promise<boolean>;
 }>;
 
-export type Repositories = Readonly<{
-  clinics: ClinicRepository;
-  patients: PatientRepository;
-  appointments: AppointmentRepository;
-  reminders: ReminderRepository;
-  inboundMessages: InboundMessageRepository;
-}>;
-
-/** Runs `work` in one database transaction, with repositories bound to it. */
-export type Transaction = <T>(work: (repos: Repositories) => Promise<T>) => Promise<T>;
+/** Runs `work` in one database transaction. Every repository call made inside `work` joins it. */
+export type Transaction = <T>(work: () => Promise<T>) => Promise<T>;
 
 export type ProviderClient = Readonly<{
   sendMessage(input: { to: Phone; text: string; idempotencyKey: ReminderId }): Promise<SendOutcome>;

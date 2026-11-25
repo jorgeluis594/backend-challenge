@@ -1,16 +1,22 @@
 import { parseReply } from '@/app/parse-reply';
-import type { Transaction } from '@/app/ports';
+import type { AppointmentRepository, InboundMessageRepository, ReminderRepository, Transaction } from '@/app/ports';
 import type { InboundMessage } from '@/domain/inbound-message';
 import { now } from '@/infra/clock';
 
 export type HandleInboundMessageInput = InboundMessage;
-export type HandleInboundMessageDeps = Readonly<{ transaction: Transaction }>;
+export type HandleInboundMessageDeps = Readonly<{
+  transaction: Transaction;
+  inboundMessages: InboundMessageRepository;
+  appointments: AppointmentRepository;
+  reminders: ReminderRepository;
+}>;
 
 /** The message is stored in the same transaction that applies it, so a failure lets the provider's retry apply it again. */
 export const makeHandleInboundMessage =
   (deps: HandleInboundMessageDeps) =>
   (input: HandleInboundMessageInput): Promise<'applied' | 'duplicate' | 'ignored'> =>
-    deps.transaction(async ({ inboundMessages, appointments, reminders }) => {
+    deps.transaction(async () => {
+      const { inboundMessages, appointments, reminders } = deps;
       if (!(await inboundMessages.insertIfNew(input))) return 'duplicate';
       const reply = parseReply(input.text);
       if (!reply) return 'ignored';

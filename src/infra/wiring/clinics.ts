@@ -1,4 +1,4 @@
 import { makeCreateClinic } from '@/app/create-clinic';
-import { repositories } from '@/infra/repositories';
+import { clinicRepository } from '@/infra/repositories/clinics';
 
-export const createClinic = makeCreateClinic({ clinics: repositories.clinics });
+export const createClinic = makeCreateClinic({ clinics: clinicRepository });

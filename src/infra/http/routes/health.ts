@@ -1,9 +1,9 @@
 import { Router } from 'express';
-import { prisma } from '@/infra/db';
+import { db } from '@/infra/db';
 
 export const healthRouter = Router();
 
 healthRouter.get('/health', async (_req, res) => {
-  await prisma.clinic.count();
+  await db().clinic.count();
   res.json({ status: 'ok' });
 });

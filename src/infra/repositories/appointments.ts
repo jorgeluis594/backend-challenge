@@ -1,9 +1,10 @@
-import type { $Enums, Prisma } from '@prisma/client';
+import type { $Enums } from '@prisma/client';
 import type { AppointmentRepository } from '@/app/ports';
 import type { Appointment, AppointmentId } from '@/domain/appointment';
 import type { ClinicId } from '@/domain/clinic';
 import type { PatientId } from '@/domain/patient';
 import type { Reminder, ReminderId, SkipReason } from '@/domain/reminder';
+import { db } from '@/infra/db';
 
 type ReminderRow = Readonly<{
   id: string;
@@ -52,24 +53,24 @@ const toAppointment = (row: AppointmentRow): Appointment => ({
   reminders: row.reminders.map(toReminder),
 });
 
-export const makeAppointmentRepository = (db: Prisma.TransactionClient): AppointmentRepository => ({
+export const appointmentRepository: AppointmentRepository = {
   create: async ({ reminder, ...appointment }) =>
     toAppointment(
-      await db.appointment.create({
+      await db().appointment.create({
         data: { ...appointment, reminders: { create: { ...reminder, nextAttemptAt: reminder.scheduledFor } } },
         include: withReminders,
       }),
     ),
   findById: async ({ id }) => {
-    const row = await db.appointment.findUnique({ where: { id }, include: withReminders });
+    const row = await db().appointment.findUnique({ where: { id }, include: withReminders });
     if (!row) return null;
     return toAppointment(row);
   },
   update: async ({ id, ...changes }) => {
-    await db.appointment.update({ where: { id }, data: changes });
+    await db().appointment.update({ where: { id }, data: changes });
   },
   findLastRemindedByPhone: async ({ phone, at }) => {
-    const reminder = await db.reminder.findFirst({
+    const reminder = await db().reminder.findFirst({
       where: {
         status: 'sent',
         appointment: { status: { not: 'cancelled' }, startsAt: { gt: at }, patient: { phone } },
@@ -80,4 +81,4 @@ export const makeAppointmentRepository = (db: Prisma.TransactionClient): Appoint
     if (!reminder) return null;
     return { id: reminder.appointmentId as AppointmentId };
   },
-});
+};
