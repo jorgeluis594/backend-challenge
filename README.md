@@ -106,7 +106,7 @@ Los instantes son UTC en todas partes: `Date` en el código y `timestamptz` en l
 | Qué cuenta como SI o NO | Se quitan tildes, mayúsculas y lo que no sea letra o dígito en los extremos: `¡Sí!` cuenta, `Sí, gracias` se ignora |
 | Respuesta del webhook | 200 con un cuerpo `{ "outcome": "applied" \| "duplicate" \| "ignored" }` que el contrato no define |
 | Franja sin envíos | Configurable por entorno, de 21 a 9 por defecto |
-| Una pasada que corre dentro de la franja | No envía un primer intento: lo deja para las 09:00, o lo marca `skipped` con `too_late` si esa hora no es anterior a la cita. Los reintentos no esperan |
+| Una pasada que corre dentro de la franja | No envía un primer intento: lo deja para el fin de la franja, o lo marca `skipped` con `too_late` si esa hora no es anterior a la cita. Los reintentos no esperan |
 
 ### Qué descarté
 
